@@ -1,15 +1,13 @@
 """
 Data loader for WikiText-2 dataset.
 
-Downloads and preprocesses WikiText-2 for language modeling.
+Downloads and preprocesses WikiText-2 for language modeling using HuggingFace datasets.
 """
 
 import os
 import numpy as np
 from collections import Counter
 from pathlib import Path
-import urllib.request
-import zipfile
 
 
 class WikiText2Loader:
@@ -41,24 +39,38 @@ class WikiText2Loader:
         self.test_data = None
 
     def download_and_extract(self):
-        """Download WikiText-2 dataset if not already present."""
+        """Download WikiText-2 dataset using HuggingFace datasets."""
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            print("ERROR: 'datasets' library not found. Installing...")
+            import subprocess
+            subprocess.check_call(['pip', 'install', '-q', 'datasets'])
+            from datasets import load_dataset
+
         dataset_path = self.data_dir / 'wikitext-2'
 
         if dataset_path.exists():
             print("WikiText-2 dataset already exists")
             return
 
-        print("Downloading WikiText-2 dataset...")
-        url = 'https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip'
-        zip_path = self.data_dir / 'wikitext-2-v1.zip'
+        print("Downloading WikiText-2 dataset from HuggingFace...")
+        dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', cache_dir=str(self.data_dir))
 
-        urllib.request.urlretrieve(url, zip_path)
+        # Create directory and save text files
+        dataset_path.mkdir(exist_ok=True)
 
-        print("Extracting dataset...")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(self.data_dir)
+        # Save train, validation, test splits
+        print("Saving dataset files...")
+        with open(dataset_path / 'wiki.train.tokens', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(dataset['train']['text']))
 
-        os.remove(zip_path)
+        with open(dataset_path / 'wiki.valid.tokens', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(dataset['validation']['text']))
+
+        with open(dataset_path / 'wiki.test.tokens', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(dataset['test']['text']))
+
         print("Download complete!")
 
     def load_data(self):
