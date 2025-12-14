@@ -1,0 +1,66 @@
+{
+  "system": {
+    "name": "Self-Learning K-1 System",
+    "phase_1_duration": 10000,
+    "seed": 42
+  },
+  "trust": {
+    "initial": 0.3,
+    "deletion_threshold": 0.2,
+    "cache_threshold": 0.7,
+    "error_penalty_multiplier": 0.9,
+    "success_reward_multiplier": 0.5,
+    "success_reward_cap": 0.3
+  },
+  "structure": {
+    "min_agents_per_manager": 3,
+    "max_total_agents": 1000,
+    "max_agents_per_manager": 50,
+    "max_hierarchy_depth": 6,
+    "routing_confidence_threshold": 0.5
+  },
+  "learning": {
+    "top_k": 3,
+    "learning_rate": 0.001,
+    "batch_size": 32
+  },
+  "operations": {
+    "prune_interval": 10000,
+    "merge_interval": 10000,
+    "reorganize_interval": 50000,
+    "cache_decay_interval": 10000
+  },
+  "pruning": {
+    "trust_threshold": 0.2,
+    "usage_threshold": 50,
+    "dormancy_threshold": 10000,
+    "validation_drop_threshold": 0.05
+  },
+  "merging": {
+    "similarity_threshold": 0.85,
+    "min_trust": 0.3,
+    "validation_drop_threshold": 0.05
+  },
+  "growing": {
+    "error_cluster_min_size": 100,
+    "error_frequency_threshold": 0.01,
+    "new_agent_initial_trust": 0.3,
+    "validation_period": 1000,
+    "success_threshold": 0.2,
+    "failure_threshold": 0.05
+  },
+  "exploration": {
+    "initial_rate": 0.3,
+    "decay_constant": 100000,
+    "minimum_rate": 0.05
+  },
+  "rollback": {
+    "max_snapshots": 5,
+    "performance_drop_threshold": 0.15
+  },
+  "stopping": {
+    "max_iterations": 500000,
+    "patience": 50000,
+    "min_improvement": 0.001
+  }
+}
