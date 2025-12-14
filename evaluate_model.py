@@ -17,7 +17,7 @@ matplotlib.use('Agg')  # For headless environments
 import matplotlib.pyplot as plt
 
 
-def load_trained_model(model_path: str = 'trained_k1_10m.pkl'):
+def load_trained_model(model_path: str = 'trained_k1_50m.pkl'):
     """Load trained model."""
     print(f"Loading model from {model_path}...")
     with open(model_path, 'rb') as f:
@@ -285,7 +285,7 @@ def main():
         model_data = load_trained_model()
     except FileNotFoundError:
         print("\n❌ No trained model found. Please train first:")
-        print("   python train_10m_model.py")
+        print("   python train_10m_model.py  # Trains 50M parameter model")
         return
 
     # Load metrics

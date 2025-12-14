@@ -39,9 +39,9 @@ The K-1 System is a novel neural network architecture that:
 
 ## Quick Start
 
-### 🔥 Train 10M Parameter Model (BEST - VERIFIABLE LEARNING)
+### 🔥 Train 50M Parameter Model (BEST - VERIFIABLE LEARNING)
 
-Train a proper **10 million parameter** language model with comprehensive evaluation:
+Train a proper **50 million parameter** language model with comprehensive evaluation:
 
 **Google Colab:**
 ```python
@@ -65,14 +65,14 @@ python evaluate_model.py
 ```
 
 **What you get:**
-- ✅ **10.1M parameters** (42 hierarchical agents)
-- ✅ **Real dataset** (TinyStories - auto-downloaded)
+- ✅ **52M parameters** (96 hierarchical agents)
+- ✅ **Real dataset** (WikiText-2 - auto-downloaded)
 - ✅ **Perplexity tracking** (proper language modeling metric)
 - ✅ **Baseline comparison** (vs random model)
 - ✅ **Learning verification** (proves it's actually learning!)
 - ✅ **Visualization** (training curves saved as PNG)
 - ✅ **Agent specialization analysis**
-- ✅ **Saved model** (`trained_k1_10m.pkl`)
+- ✅ **Saved model** (`trained_k1_50m.pkl`)
 
 ### Train on WikiText-2 (Smaller Scale)
 
@@ -120,34 +120,34 @@ system.train(train_data, train_labels)
 
 ## Architecture
 
-### 10M Parameter Model Architecture
+### 50M Parameter Model Architecture
 
 **Parameter Breakdown:**
 ```
-Embeddings:     5.12M  (20,000 vocab × 256 dim)
-Agents (42):    3.95M  (42 agents × ~94k params each)
-Output Proj:    1.02M  (256 dim × 20,000 vocab)
+Embeddings:    11.52M  (30,000 vocab × 384 dim)
+Agents (96):   28.91M  (96 agents × ~301k params each)
+Output Proj:   11.52M  (384 dim × 30,000 vocab)
 ────────────────────────
-TOTAL:         10.09M parameters
+TOTAL:         51.95M parameters
 ```
 
-**Hierarchy Structure (42 agents):**
+**Hierarchy Structure (96 agents):**
 ```
 Language Model (root)
-├─ Syntax Manager (8 agents)
-├─ Semantics Manager (8 agents)
-├─ Vocabulary Manager (8 agents)
-├─ Context Manager (6 agents)
-└─ Structure Manager (6 agents)
+├─ Syntax Manager (18 agents)
+├─ Semantics Manager (18 agents)
+├─ Vocabulary Manager (18 agents)
+├─ Context Manager (18 agents)
+└─ Structure Manager (18 agents)
 ```
 
 **Per-Agent Architecture:**
-- Input: 256-dim
-- Hidden: 256-dim (ReLU activation)
-- Output: 256-dim
-- Routing: 256 → 10 (for child selection)
+- Input: 384-dim
+- Hidden: 384-dim (ReLU activation)
+- Output: 384-dim
+- Routing: 384 → 10 (for child selection)
 
-The system automatically transitions from Phase 1 (fixed parameters) to Phase 2 (self-learning).
+The system automatically transitions from Phase 1 (fixed parameters 0-10,000 iterations) to Phase 2 (autonomous self-learning 10,000+ iterations).
 
 ### WikiText-2 Training Setup
 

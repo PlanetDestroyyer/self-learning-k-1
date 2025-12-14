@@ -1,7 +1,7 @@
 """
-Training script for 10M parameter K-1 Language Model.
+Training script for 50M parameter K-1 Language Model.
 
-This script trains a properly scaled K-1 system on LLM datasets
+This script trains a properly scaled K-1 system on WikiText-2 dataset
 with comprehensive evaluation to verify learning.
 """
 
@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 print("="*70)
-print(" 10M PARAMETER SELF-LEARNING K-1 LANGUAGE MODEL")
+print(" 50M PARAMETER SELF-LEARNING K-1 LANGUAGE MODEL")
 print("="*70)
 
 # Add to path
@@ -44,17 +44,17 @@ from k1_system.utils import MetricsTracker, TrainingLogger
 
 class K1LanguageModel:
     """
-    10M parameter K-1 Language Model with proper evaluation.
+    50M parameter K-1 Language Model with proper evaluation.
 
     Architecture:
-    - Vocabulary: 20,000 words
-    - Embedding dimension: 256
-    - Hierarchy: 40 agents (256→256→256)
-    - Total parameters: ~10.1M
+    - Vocabulary: 30,000 words (WikiText-2 full vocab)
+    - Embedding dimension: 384
+    - Hierarchy: 90 agents (384→384→384)
+    - Total parameters: ~52M
     """
 
     def __init__(self, config_path: str = None):
-        """Initialize 10M parameter model."""
+        """Initialize 50M parameter model."""
         # Load config
         if config_path is None:
             config_path = Path(__file__).parent / 'k1_system' / 'config' / 'config_phase1.json'
@@ -62,12 +62,12 @@ class K1LanguageModel:
         with open(config_path, 'r') as f:
             self.config = json.load(f)
 
-        # Model configuration (10M parameters)
-        self.vocab_size = 20000
-        self.embedding_dim = 256
-        self.hidden_dim = 256
+        # Model configuration (50M parameters)
+        self.vocab_size = 30000  # Full WikiText vocab
+        self.embedding_dim = 384
+        self.hidden_dim = 384
         self.seq_length = 128
-        self.num_agents_target = 40
+        self.num_agents_target = 90
 
         # Adjust training config
         self.config['stopping']['max_iterations'] = 100000
@@ -75,7 +75,7 @@ class K1LanguageModel:
 
         # Initialize logger
         self.logger = TrainingLogger()
-        self.logger.log("Initializing 10M Parameter K-1 Language Model", 'INFO')
+        self.logger.log("Initializing 50M Parameter K-1 Language Model", 'INFO')
 
         # Build hierarchy
         self.hierarchy = self._build_scaled_hierarchy()
@@ -102,7 +102,7 @@ class K1LanguageModel:
         self.logger.log(f"Model initialized: {self.total_params:,} parameters", 'INFO')
 
     def _build_scaled_hierarchy(self):
-        """Build hierarchy with ~40 agents for 10M params."""
+        """Build hierarchy with ~90 agents for 50M params."""
         hierarchy = Hierarchy(max_depth=4)
 
         builder = HierarchyBuilder(
@@ -116,15 +116,15 @@ class K1LanguageModel:
         root = builder._create_agent('master', 'master', 'Language Model')
         hierarchy.set_root(root)
 
-        # 5 domain managers
+        # 5 domain managers with more agents each for 50M model
         domains = [
-            ('Syntax', 8),      # 8 agents
-            ('Semantics', 8),   # 8 agents
-            ('Vocabulary', 8),  # 8 agents
-            ('Context', 6),     # 6 agents
-            ('Structure', 6)    # 6 agents
+            ('Syntax', 18),      # 18 agents
+            ('Semantics', 18),   # 18 agents
+            ('Vocabulary', 18),  # 18 agents
+            ('Context', 18),     # 18 agents
+            ('Structure', 18)    # 18 agents
         ]
-        # Total: 5 managers + 36 agents + 1 root = 42 agents
+        # Total: 5 managers + 90 agents + 1 root = 96 agents
 
         for manager_name, num_agents in domains:
             manager = builder._create_agent(
@@ -265,7 +265,7 @@ class K1LanguageModel:
 
     def train(self, data_loader: LLMDataLoader, num_iterations: int = None):
         """
-        Train the 10M parameter model.
+        Train the 50M parameter model.
 
         Args:
             data_loader: Data loader
@@ -274,11 +274,12 @@ class K1LanguageModel:
         if num_iterations is None:
             num_iterations = self.config['stopping']['max_iterations']
 
-        # Set embeddings
-        self.embeddings = data_loader.get_embeddings(self.embedding_dim)
+        # Set embeddings and initialize output projection
+        embeddings = data_loader.get_embeddings(self.embedding_dim)
+        self.set_embeddings(embeddings)
 
         self.logger.log(f"\n{'='*70}", 'INFO')
-        self.logger.log(f"STARTING TRAINING - 10M PARAMETER K-1 MODEL", 'INFO')
+        self.logger.log(f"STARTING TRAINING - 50M PARAMETER K-1 MODEL", 'INFO')
         self.logger.log(f"{'='*70}", 'INFO')
         self.logger.log(f"Dataset: {data_loader.dataset_name}", 'INFO')
         self.logger.log(f"Vocabulary: {len(data_loader.vocab):,} words", 'INFO')
@@ -543,7 +544,7 @@ class K1LanguageModel:
         """Save trained model."""
         import pickle
 
-        save_path = Path('trained_k1_10m.pkl')
+        save_path = Path('trained_k1_50m.pkl')
         model_data = {
             'hierarchy': self.hierarchy,
             'embeddings': self.embeddings,
@@ -561,24 +562,24 @@ class K1LanguageModel:
 def main():
     """Main training function."""
     print("\n" + "="*70)
-    print("TRAINING 10M PARAMETER K-1 LANGUAGE MODEL")
+    print("TRAINING 50M PARAMETER K-1 LANGUAGE MODEL")
     print("="*70 + "\n")
 
     # Load dataset
     print("📚 Loading dataset...")
-    dataset_choice = os.environ.get('K1_DATASET', 'tinystories')
+    dataset_choice = os.environ.get('K1_DATASET', 'wikitext')  # Use WikiText for richer dataset
 
     data_loader = LLMDataLoader(
         dataset_name=dataset_choice,
         data_dir='data',
-        vocab_size=20000,  # Match model vocab size
+        vocab_size=30000,  # Match model vocab size (50M model)
         seq_length=128,
         train_split=0.9
     )
     data_loader.load_data()
 
     # Initialize model
-    print("\n🚀 Initializing 10M parameter model...")
+    print("\n🚀 Initializing 50M parameter model...")
     model = K1LanguageModel()
 
     # Train
@@ -589,7 +590,7 @@ def main():
     print("✅ TRAINING COMPLETE!")
     print("="*70)
     print("\n📊 Check logs/ directory for detailed metrics")
-    print("💾 Model saved to trained_k1_10m.pkl")
+    print("💾 Model saved to trained_k1_50m.pkl")
 
 
 if __name__ == '__main__':
