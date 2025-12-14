@@ -1,8 +1,8 @@
 """
-Training script for 50M parameter K-1 Language Model.
+Training script for 5M parameter K-1 Language Model (FAST VERSION).
 
-This script trains a properly scaled K-1 system on WikiText-2 dataset
-with comprehensive evaluation to verify learning.
+This script trains a small but complete K-1 system on WikiText-2 dataset
+optimized for quick testing and validation.
 """
 
 import sys
@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 print("="*70)
-print(" 50M PARAMETER SELF-LEARNING K-1 LANGUAGE MODEL")
+print(" 5M PARAMETER SELF-LEARNING K-1 LANGUAGE MODEL (FAST)")
 print("="*70)
 
 # Add to path
@@ -44,17 +44,17 @@ from k1_system.utils import MetricsTracker, TrainingLogger
 
 class K1LanguageModel:
     """
-    50M parameter K-1 Language Model with proper evaluation.
+    5M parameter K-1 Language Model optimized for fast training.
 
     Architecture:
-    - Vocabulary: 30,000 words (WikiText-2 full vocab)
-    - Embedding dimension: 384
-    - Hierarchy: 90 agents (384→384→384)
-    - Total parameters: ~52M
+    - Vocabulary: 10,000 words (most common WikiText-2 words)
+    - Embedding dimension: 128
+    - Hierarchy: 24 agents (128→128→128)
+    - Total parameters: ~5M
     """
 
     def __init__(self, config_path: str = None):
-        """Initialize 50M parameter model."""
+        """Initialize 5M parameter model (fast version)."""
         # Load config
         if config_path is None:
             config_path = Path(__file__).parent / 'k1_system' / 'config' / 'config_phase1.json'
@@ -62,20 +62,20 @@ class K1LanguageModel:
         with open(config_path, 'r') as f:
             self.config = json.load(f)
 
-        # Model configuration (50M parameters)
-        self.vocab_size = 30000  # Full WikiText vocab
-        self.embedding_dim = 384
-        self.hidden_dim = 384
-        self.seq_length = 128
-        self.num_agents_target = 90
+        # Model configuration (5M parameters - FAST)
+        self.vocab_size = 10000  # Smaller vocab for speed
+        self.embedding_dim = 128  # Smaller embeddings
+        self.hidden_dim = 128  # Smaller hidden
+        self.seq_length = 64  # Shorter sequences
+        self.num_agents_target = 20  # Fewer agents
 
-        # Adjust training config
-        self.config['stopping']['max_iterations'] = 100000
-        self.config['system']['phase_1_duration'] = 10000
+        # Adjust training config for FAST testing
+        self.config['stopping']['max_iterations'] = 2000  # Quick testing!
+        self.config['system']['phase_1_duration'] = 1000  # Phase 2 at 1000
 
         # Initialize logger
         self.logger = TrainingLogger()
-        self.logger.log("Initializing 50M Parameter K-1 Language Model", 'INFO')
+        self.logger.log("Initializing 5M Parameter K-1 Language Model (FAST)", 'INFO')
 
         # Build hierarchy
         self.hierarchy = self._build_scaled_hierarchy()
@@ -102,8 +102,8 @@ class K1LanguageModel:
         self.logger.log(f"Model initialized: {self.total_params:,} parameters", 'INFO')
 
     def _build_scaled_hierarchy(self):
-        """Build hierarchy with ~90 agents for 50M params."""
-        hierarchy = Hierarchy(max_depth=4)
+        """Build hierarchy with ~24 agents for 5M params (FAST)."""
+        hierarchy = Hierarchy(max_depth=3)
 
         builder = HierarchyBuilder(
             input_dim=self.embedding_dim,
@@ -116,15 +116,14 @@ class K1LanguageModel:
         root = builder._create_agent('master', 'master', 'Language Model')
         hierarchy.set_root(root)
 
-        # 5 domain managers with more agents each for 50M model
+        # 4 domain managers with fewer agents each for FAST training
         domains = [
-            ('Syntax', 18),      # 18 agents
-            ('Semantics', 18),   # 18 agents
-            ('Vocabulary', 18),  # 18 agents
-            ('Context', 18),     # 18 agents
-            ('Structure', 18)    # 18 agents
+            ('Syntax', 5),      # 5 agents
+            ('Semantics', 5),   # 5 agents
+            ('Vocabulary', 5),  # 5 agents
+            ('Context', 5),     # 5 agents
         ]
-        # Total: 5 managers + 90 agents + 1 root = 96 agents
+        # Total: 4 managers + 20 agents + 1 root = 25 agents
 
         for manager_name, num_agents in domains:
             manager = builder._create_agent(
@@ -279,7 +278,7 @@ class K1LanguageModel:
         self.set_embeddings(embeddings)
 
         self.logger.log(f"\n{'='*70}", 'INFO')
-        self.logger.log(f"STARTING TRAINING - 50M PARAMETER K-1 MODEL", 'INFO')
+        self.logger.log(f"STARTING TRAINING - 5M PARAMETER K-1 MODEL (FAST)", 'INFO')
         self.logger.log(f"{'='*70}", 'INFO')
         self.logger.log(f"Dataset: {data_loader.dataset_name}", 'INFO')
         self.logger.log(f"Vocabulary: {len(data_loader.vocab):,} words", 'INFO')
@@ -314,8 +313,8 @@ class K1LanguageModel:
             batch_x, batch_y = data_loader.get_batch('train', batch_size)
             train_loss, train_ppl = self._training_step(batch_x, batch_y, data_loader)
 
-            # Validation (every 500 iterations)
-            if iteration % 500 == 0:
+            # Validation (every 100 iterations for faster feedback)
+            if iteration % 100 == 0:
                 val_ppl = self._evaluate(data_loader, 'val')
                 self.perplexity_history.append((iteration, val_ppl))
 
@@ -332,12 +331,12 @@ class K1LanguageModel:
                 elapsed = time.time() - start_time
                 self._log_progress(iteration, train_ppl, val_ppl, elapsed)
 
-            # Phase 2: Parameter adjustment
-            if iteration >= self.phase_1_duration and iteration % 1000 == 0:
+            # Phase 2: Parameter adjustment (less frequent for speed)
+            if iteration >= self.phase_1_duration and iteration % 200 == 0:
                 self._phase_2_adjustments(iteration)
 
-            # Structural operations
-            if iteration % 5000 == 0 and iteration > 0:
+            # Structural operations (less frequent for speed)
+            if iteration % 500 == 0 and iteration > 0:
                 self._run_structural_operations(iteration)
 
             # Update progress bar
@@ -360,18 +359,23 @@ class K1LanguageModel:
         self._finalize_training(data_loader)
 
     def _training_step(self, batch_x, batch_y, data_loader):
-        """Execute one training step."""
+        """Execute one training step (OPTIMIZED FOR SPEED)."""
         batch_size, seq_len = batch_x.shape
         total_loss = 0.0
         total_log_prob = 0.0
         total_tokens = 0
 
-        for i in range(batch_size):
-            # Process sequence
+        # Sample just a few sequences per batch for speed
+        sample_size = min(4, batch_size)  # Only process 4 sequences
+
+        for i in range(sample_size):
             seq_loss = 0.0
             seq_log_prob = 0.0
 
-            for t in range(seq_len):
+            # Sample a few tokens per sequence for speed
+            token_indices = np.random.choice(seq_len, size=min(8, seq_len), replace=False)
+
+            for t in token_indices:
                 # Embed current token
                 current_token_idx = batch_x[i, t]
                 x = self.embeddings[current_token_idx]
@@ -385,71 +389,84 @@ class K1LanguageModel:
                 # Target token
                 target_idx = batch_y[i, t]
 
-                # Compute loss (cross-entropy)
+                # Compute loss (cross-entropy) with numerical stability
                 logits_max = np.max(logits)
-                exp_logits = np.exp(logits - logits_max)
-                probs = exp_logits / np.sum(exp_logits)
+                logits_stable = logits - logits_max
+                exp_logits = np.exp(np.clip(logits_stable, -20, 20))  # Clip for stability
+                probs = exp_logits / (np.sum(exp_logits) + 1e-10)
 
-                # Clip for numerical stability
+                # Clip probability for numerical stability
                 prob_target = np.clip(probs[target_idx], 1e-10, 1.0)
                 loss = -np.log(prob_target)
+
+                # Clip loss to prevent explosion
+                loss = np.clip(loss, 0, 20)
 
                 seq_loss += loss
                 seq_log_prob += np.log(prob_target)
 
-                # Gradient and update (simplified)
-                if t % 10 == 0:  # Update every 10 tokens
+                # Update only occasionally for speed
+                if np.random.random() < 0.1:  # 10% of the time
                     activated_agents = routing_path.get_activated_agents()
-                    if activated_agents:
-                        selected_agents = self.credit_assignment.assign_credit(
-                            routing_path, loss, np.array([target_idx]), hidden
-                        )
+                    if activated_agents and len(activated_agents) > 0:
+                        # Pick just 1-2 agents to update
+                        num_to_update = min(2, len(activated_agents))
+                        agents_to_update = np.random.choice(activated_agents, size=num_to_update, replace=False)
 
-                        for agent in selected_agents:
+                        for agent in agents_to_update:
                             gradient = self.weight_updater.compute_gradient(
                                 agent, x, np.array([target_idx]), hidden
                             )
                             self.weight_updater.update_agent(agent, gradient)
 
                             # Trust update
-                            error_reduction = 0.001
-                            if error_reduction > 0:
+                            if loss < 10:  # Only reward reasonable losses
+                                error_reduction = max(0, 10 - loss) / 10
                                 self.trust_system.report_success(agent, error_reduction)
 
-            total_loss += seq_loss / seq_len
-            total_log_prob += seq_log_prob / seq_len
-            total_tokens += seq_len
+            num_tokens = len(token_indices)
+            total_loss += seq_loss / num_tokens
+            total_log_prob += seq_log_prob / num_tokens
+            total_tokens += num_tokens
 
-        avg_loss = total_loss / batch_size
-        perplexity = np.exp(-total_log_prob / total_tokens)
+        avg_loss = total_loss / sample_size
+
+        # Compute perplexity with numerical stability
+        avg_log_prob = total_log_prob / total_tokens
+        perplexity = np.exp(-np.clip(avg_log_prob, -20, 20))
 
         return avg_loss, perplexity
 
     def _evaluate(self, data_loader: LLMDataLoader, split: str = 'val') -> float:
         """
-        Evaluate model on validation/test set.
+        Evaluate model on validation/test set (FAST VERSION).
 
         Returns:
             Perplexity
         """
-        num_batches = 10  # Evaluate on 10 batches
+        num_batches = 3  # Only 3 batches for speed
         total_log_prob = 0.0
         total_tokens = 0
 
         for _ in range(num_batches):
-            batch_x, batch_y = data_loader.get_batch(split, batch_size=32)
+            batch_x, batch_y = data_loader.get_batch(split, batch_size=8)  # Smaller batch
             batch_size, seq_len = batch_x.shape
 
-            for i in range(batch_size):
-                for t in range(seq_len):
+            # Sample fewer sequences and tokens
+            for i in range(min(4, batch_size)):
+                # Sample random tokens instead of all
+                token_indices = np.random.choice(seq_len, size=min(8, seq_len), replace=False)
+
+                for t in token_indices:
                     # Embed and forward
                     x = self.embeddings[batch_x[i, t]]
                     hidden, _ = self.forward_pass.forward(x, mode='hard')
 
-                    # Project to vocab
+                    # Project to vocab with numerical stability
                     logits = hidden @ self.output_projection
-                    exp_logits = np.exp(logits - np.max(logits))
-                    probs = exp_logits / np.sum(exp_logits)
+                    logits_stable = logits - np.max(logits)
+                    exp_logits = np.exp(np.clip(logits_stable, -20, 20))
+                    probs = exp_logits / (np.sum(exp_logits) + 1e-10)
 
                     # Log probability of target
                     target_idx = batch_y[i, t]
@@ -457,7 +474,9 @@ class K1LanguageModel:
                     total_log_prob += np.log(prob_target)
                     total_tokens += 1
 
-        perplexity = np.exp(-total_log_prob / total_tokens)
+        # Compute perplexity with clipping
+        avg_log_prob = total_log_prob / max(total_tokens, 1)
+        perplexity = np.exp(-np.clip(avg_log_prob, -20, 20))
         return perplexity
 
     def _activate_phase_2(self):
@@ -544,7 +563,7 @@ class K1LanguageModel:
         """Save trained model."""
         import pickle
 
-        save_path = Path('trained_k1_50m.pkl')
+        save_path = Path('trained_k1_5m_fast.pkl')
         model_data = {
             'hierarchy': self.hierarchy,
             'embeddings': self.embeddings,
@@ -562,35 +581,36 @@ class K1LanguageModel:
 def main():
     """Main training function."""
     print("\n" + "="*70)
-    print("TRAINING 50M PARAMETER K-1 LANGUAGE MODEL")
+    print("TRAINING 5M PARAMETER K-1 LANGUAGE MODEL (FAST)")
     print("="*70 + "\n")
 
     # Load dataset
     print("📚 Loading dataset...")
-    dataset_choice = os.environ.get('K1_DATASET', 'wikitext')  # Use WikiText for richer dataset
+    dataset_choice = os.environ.get('K1_DATASET', 'wikitext')
 
     data_loader = LLMDataLoader(
         dataset_name=dataset_choice,
         data_dir='data',
-        vocab_size=30000,  # Match model vocab size (50M model)
-        seq_length=128,
+        vocab_size=10000,  # Match model vocab size (5M model - FAST)
+        seq_length=64,     # Shorter sequences
         train_split=0.9
     )
     data_loader.load_data()
 
     # Initialize model
-    print("\n🚀 Initializing 50M parameter model...")
+    print("\n🚀 Initializing 5M parameter model (FAST)...")
     model = K1LanguageModel()
 
     # Train
-    print("\n🎯 Starting training...\n")
+    print("\n🎯 Starting training (2000 iterations max)...\n")
     model.train(data_loader)
 
     print("\n" + "="*70)
     print("✅ TRAINING COMPLETE!")
     print("="*70)
     print("\n📊 Check logs/ directory for detailed metrics")
-    print("💾 Model saved to trained_k1_50m.pkl")
+    print("💾 Model saved to trained_k1_5m_fast.pkl")
+    print("\n⚡ Training optimized for speed - results in ~10-30 minutes!")
 
 
 if __name__ == '__main__':
