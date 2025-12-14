@@ -39,6 +39,37 @@ The K-1 System is a novel neural network architecture that:
 
 ## Quick Start
 
+### Train on WikiText-2 (Recommended)
+
+**Google Colab (Easiest):**
+```python
+# In a Colab notebook cell:
+!git clone https://github.com/PlanetDestroyyer/self-learning-k-1.git
+%cd self-learning-k-1
+!python colab_run.py
+```
+
+**Local Machine:**
+```bash
+# Clone repository
+git clone https://github.com/PlanetDestroyyer/self-learning-k-1.git
+cd self-learning-k-1
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run training on WikiText-2
+python colab_run.py
+```
+
+The system will:
+1. 📚 Download WikiText-2 dataset automatically
+2. 🏗️ Build language-specific hierarchy (Syntax, Semantics, Vocabulary)
+3. 🎯 Train with automatic Phase 1 → Phase 2 transition
+4. 📊 Save logs and metrics to `logs/` directory
+
+### Simple Demo (Synthetic Data)
+
 ```python
 from k1_system.main import K1System
 import numpy as np
@@ -52,14 +83,36 @@ system = K1System()
 system.train(train_data, train_labels)
 ```
 
-Run the example:
-```bash
-python k1_system/main.py
-```
-
 ## Architecture
 
-The system automatically transitions from Phase 1 (fixed parameters) to Phase 2 (self-learning) at iteration 10,000.
+The system automatically transitions from Phase 1 (fixed parameters) to Phase 2 (self-learning).
+
+### WikiText-2 Training Setup
+
+**Language-Specific Hierarchy:**
+```
+Master Manager (Language)
+├─ Syntax Manager
+│  ├─ Grammar Agent
+│  ├─ Punctuation Agent
+│  └─ Structure Agent
+├─ Semantics Manager
+│  ├─ Meaning Agent
+│  ├─ Context Agent
+│  └─ Relations Agent
+└─ Vocabulary Manager
+   ├─ CommonWords Agent
+   ├─ RareWords Agent
+   └─ Entities Agent
+```
+
+**Training Details:**
+- **Dataset**: WikiText-2 (2M tokens, ~30K vocabulary)
+- **Task**: Next-word prediction (language modeling)
+- **Phase 1**: Iterations 0-5,000 (baseline)
+- **Phase 2**: Iterations 5,000+ (autonomous optimization)
+- **Embeddings**: 128-dimensional word vectors
+- **Batch Size**: 32 sequences of 50 tokens
 
 ### Phase 2 Autonomous Adjustments
 
