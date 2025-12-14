@@ -69,9 +69,12 @@ class K1LanguageModel:
         self.seq_length = 64  # Shorter sequences
         self.num_agents_target = 20  # Fewer agents
 
-        # Adjust training config for FAST testing
-        self.config['stopping']['max_iterations'] = 2000  # Quick testing!
-        self.config['system']['phase_1_duration'] = 1000  # Phase 2 at 1000
+        # Adjust training config for proper learning
+        self.config['stopping']['max_iterations'] = 20000  # Longer for real learning
+        self.config['system']['phase_1_duration'] = 10000  # Phase 2 at 10000
+
+        # CRITICAL: Lower learning rate to prevent explosion
+        self.config['learning']['learning_rate'] = 0.0001  # Much lower!
 
         # Initialize logger
         self.logger = TrainingLogger()
@@ -264,7 +267,7 @@ class K1LanguageModel:
 
     def train(self, data_loader: LLMDataLoader, num_iterations: int = None):
         """
-        Train the 50M parameter model.
+        Train the 5M parameter model with proper learning.
 
         Args:
             data_loader: Data loader
@@ -313,8 +316,8 @@ class K1LanguageModel:
             batch_x, batch_y = data_loader.get_batch('train', batch_size)
             train_loss, train_ppl = self._training_step(batch_x, batch_y, data_loader)
 
-            # Validation (every 100 iterations for faster feedback)
-            if iteration % 100 == 0:
+            # Validation (every 200 iterations)
+            if iteration % 200 == 0:
                 val_ppl = self._evaluate(data_loader, 'val')
                 self.perplexity_history.append((iteration, val_ppl))
 
@@ -405,18 +408,26 @@ class K1LanguageModel:
                 seq_loss += loss
                 seq_log_prob += np.log(prob_target)
 
-                # Update only occasionally for speed
-                if np.random.random() < 0.1:  # 10% of the time
+                # Update more frequently for actual learning
+                if np.random.random() < 0.5:  # 50% of the time (was 10%)
                     activated_agents = routing_path.get_activated_agents()
                     if activated_agents and len(activated_agents) > 0:
-                        # Pick just 1-2 agents to update
-                        num_to_update = min(2, len(activated_agents))
-                        agents_to_update = np.random.choice(activated_agents, size=num_to_update, replace=False)
+                        # Update more agents for better learning
+                        num_to_update = min(5, len(activated_agents))  # 5 agents (was 2)
+                        agents_to_update = activated_agents[:num_to_update] if len(activated_agents) <= num_to_update else np.random.choice(activated_agents, size=num_to_update, replace=False)
 
                         for agent in agents_to_update:
+                            # Compute gradient
                             gradient = self.weight_updater.compute_gradient(
                                 agent, x, np.array([target_idx]), hidden
                             )
+
+                            # CRITICAL: Clip gradient to prevent explosion
+                            for key in gradient:
+                                if gradient[key] is not None:
+                                    gradient[key] = np.clip(gradient[key], -1.0, 1.0)
+
+                            # Update with clipped gradient
                             self.weight_updater.update_agent(agent, gradient)
 
                             # Trust update
@@ -439,23 +450,23 @@ class K1LanguageModel:
 
     def _evaluate(self, data_loader: LLMDataLoader, split: str = 'val') -> float:
         """
-        Evaluate model on validation/test set (FAST VERSION).
+        Evaluate model on validation/test set (MORE THOROUGH).
 
         Returns:
             Perplexity
         """
-        num_batches = 3  # Only 3 batches for speed
+        num_batches = 10  # More batches for better estimate
         total_log_prob = 0.0
         total_tokens = 0
 
         for _ in range(num_batches):
-            batch_x, batch_y = data_loader.get_batch(split, batch_size=8)  # Smaller batch
+            batch_x, batch_y = data_loader.get_batch(split, batch_size=16)
             batch_size, seq_len = batch_x.shape
 
-            # Sample fewer sequences and tokens
-            for i in range(min(4, batch_size)):
-                # Sample random tokens instead of all
-                token_indices = np.random.choice(seq_len, size=min(8, seq_len), replace=False)
+            # Evaluate on more sequences
+            for i in range(min(8, batch_size)):
+                # More tokens per sequence
+                token_indices = np.random.choice(seq_len, size=min(16, seq_len), replace=False)
 
                 for t in token_indices:
                     # Embed and forward
@@ -464,6 +475,11 @@ class K1LanguageModel:
 
                     # Project to vocab with numerical stability
                     logits = hidden @ self.output_projection
+
+                    # Check for NaN/Inf in logits
+                    if np.any(np.isnan(logits)) or np.any(np.isinf(logits)):
+                        continue
+
                     logits_stable = logits - np.max(logits)
                     exp_logits = np.exp(np.clip(logits_stable, -20, 20))
                     probs = exp_logits / (np.sum(exp_logits) + 1e-10)
@@ -471,12 +487,25 @@ class K1LanguageModel:
                     # Log probability of target
                     target_idx = batch_y[i, t]
                     prob_target = np.clip(probs[target_idx], 1e-10, 1.0)
+
+                    # Skip if prob is invalid
+                    if np.isnan(prob_target) or prob_target <= 0:
+                        continue
+
                     total_log_prob += np.log(prob_target)
                     total_tokens += 1
 
         # Compute perplexity with clipping
-        avg_log_prob = total_log_prob / max(total_tokens, 1)
+        if total_tokens == 0:
+            return float('inf')
+
+        avg_log_prob = total_log_prob / total_tokens
         perplexity = np.exp(-np.clip(avg_log_prob, -20, 20))
+
+        # Sanity check
+        if np.isnan(perplexity) or np.isinf(perplexity) or perplexity > 1e6:
+            return 1e6  # Cap at 1 million
+
         return perplexity
 
     def _activate_phase_2(self):
@@ -581,7 +610,7 @@ class K1LanguageModel:
 def main():
     """Main training function."""
     print("\n" + "="*70)
-    print("TRAINING 5M PARAMETER K-1 LANGUAGE MODEL (FAST)")
+    print("TRAINING 5M PARAMETER K-1 LANGUAGE MODEL")
     print("="*70 + "\n")
 
     # Load dataset
@@ -591,18 +620,21 @@ def main():
     data_loader = LLMDataLoader(
         dataset_name=dataset_choice,
         data_dir='data',
-        vocab_size=10000,  # Match model vocab size (5M model - FAST)
+        vocab_size=10000,  # Match model vocab size (5M model)
         seq_length=64,     # Shorter sequences
         train_split=0.9
     )
     data_loader.load_data()
 
     # Initialize model
-    print("\n🚀 Initializing 5M parameter model (FAST)...")
+    print("\n🚀 Initializing 5M parameter model...")
     model = K1LanguageModel()
 
     # Train
-    print("\n🎯 Starting training (2000 iterations max)...\n")
+    print("\n🎯 Starting training (20,000 iterations max)...\n")
+    print("⚠️ This will take 1-2 hours. Perplexity should DECREASE if learning!")
+    print("⚠️ Initial perplexity ~10K is normal (random model)")
+    print("⚠️ Watch for DECREASING perplexity as sign of learning\n")
     model.train(data_loader)
 
     print("\n" + "="*70)
@@ -610,7 +642,8 @@ def main():
     print("="*70)
     print("\n📊 Check logs/ directory for detailed metrics")
     print("💾 Model saved to trained_k1_5m_fast.pkl")
-    print("\n⚡ Training optimized for speed - results in ~10-30 minutes!")
+    print("\n📉 If perplexity decreased, the model LEARNED!")
+    print("📈 If perplexity increased/exploded, there's a bug to fix.")
 
 
 if __name__ == '__main__':
