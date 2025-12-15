@@ -28,7 +28,7 @@ from utils.metrics import MetricsTracker
 from utils.logger import Logger
 
 
-class K1Model:
+class K1SelfLearningLM:
     """
     K-1 Self-Learning Language Model.
 
@@ -544,3 +544,125 @@ class K1Model:
             'growing': self.growing.get_statistics(),
             'stopping': self.stopping.get_statistics()
         }
+
+    def get_stats(self) -> Dict:
+        """Get model stats for run_colab.py compatibility."""
+        # Count total parameters
+        total_params = 0
+        if self.embeddings is not None:
+            total_params += self.embeddings.size
+        if self.output_projection is not None:
+            total_params += self.output_projection.size
+
+        for agent in self.hierarchy.get_all_agents():
+            for key in ['W1', 'b1', 'W2', 'b2', 'routing']:
+                if key in agent.weights:
+                    total_params += agent.weights[key].size
+
+        return {
+            'total_parameters': total_params,
+            'num_agents': self.hierarchy.count_agents(),
+            'avg_trust': self.trust_system.compute_avg_trust(self.hierarchy.get_all_agents()),
+            'phase': 'Phase 2' if self.phase_2_active else 'Phase 1',
+            'best_perplexity': self.best_perplexity,
+            'iteration': self.current_iteration
+        }
+
+    def get_current_phase(self) -> str:
+        """Get current training phase."""
+        return 'Phase 2' if self.phase_2_active else 'Phase 1'
+
+    def train_step(self, x: np.ndarray, y: np.ndarray) -> float:
+        """
+        Single training step wrapper for run_colab.py compatibility.
+
+        Args:
+            x: Input sequence (seq_len,)
+            y: Target sequence (seq_len,)
+
+        Returns:
+            Loss value
+        """
+        self.current_iteration += 1
+        self.forward_pass.update_iteration(self.current_iteration)
+
+        # Initialize embeddings if needed
+        if self.embeddings is None:
+            vocab_size = self.vocab_size
+            self.embeddings = np.random.randn(vocab_size, self.embedding_dim) * 0.01
+            self.output_projection = np.random.randn(self.embedding_dim, vocab_size) * 0.01
+
+        # Check phase transition
+        if self.current_iteration == self.phase_1_duration and not self.phase_2_active:
+            self._activate_phase_2()
+
+        # Process as batch of 1
+        batch_x = x.reshape(1, -1)
+        batch_y = y.reshape(1, -1)
+
+        loss, _ = self._training_step(batch_x, batch_y)
+
+        # Run structural ops periodically
+        if self.phase_2_active and self.current_iteration % 1000 == 0:
+            self._run_structural_ops(self.current_iteration)
+
+        return loss
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """
+        Forward pass for evaluation.
+
+        Args:
+            x: Input sequence (seq_len,)
+
+        Returns:
+            Logits (seq_len, vocab_size)
+        """
+        if self.embeddings is None:
+            raise ValueError("Model not initialized. Call train_step first.")
+
+        seq_len = len(x)
+        all_logits = []
+
+        for t in range(seq_len):
+            logits, _, _ = self._forward_step(x[t])
+            all_logits.append(logits)
+
+        return np.array(all_logits)
+
+    def generate(self, prompt: np.ndarray, max_new_tokens: int = 50, temperature: float = 1.0) -> list:
+        """
+        Generate tokens autoregressively.
+
+        Args:
+            prompt: Starting token indices
+            max_new_tokens: Number of tokens to generate
+            temperature: Sampling temperature
+
+        Returns:
+            List of generated token indices
+        """
+        if self.embeddings is None:
+            raise ValueError("Model not initialized. Call train_step first.")
+
+        generated = list(prompt)
+
+        for _ in range(max_new_tokens):
+            # Get last token
+            last_token = generated[-1]
+
+            # Forward through hierarchy
+            logits, _, _ = self._forward_step(last_token)
+
+            # Apply temperature
+            logits = logits / temperature
+
+            # Softmax
+            exp_logits = np.exp(logits - np.max(logits))
+            probs = exp_logits / (np.sum(exp_logits) + 1e-10)
+
+            # Sample
+            next_token = np.random.choice(self.vocab_size, p=probs)
+            generated.append(int(next_token))
+
+        return generated
