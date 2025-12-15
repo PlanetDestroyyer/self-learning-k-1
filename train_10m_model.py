@@ -73,8 +73,8 @@ class K1LanguageModel:
         self.config['stopping']['max_iterations'] = 20000  # Longer for real learning
         self.config['system']['phase_1_duration'] = 10000  # Phase 2 at 10000
 
-        # CRITICAL: Lower learning rate to prevent explosion
-        self.config['learning']['learning_rate'] = 0.0001  # Much lower!
+        # CRITICAL: Even lower learning rate to prevent explosion
+        self.config['learning']['learning_rate'] = 0.00001  # 10x lower again!
 
         # Initialize logger
         self.logger = TrainingLogger()
@@ -262,8 +262,8 @@ class K1LanguageModel:
     def set_embeddings(self, embeddings: np.ndarray):
         """Set word embeddings and initialize output projection."""
         self.embeddings = embeddings
-        # Output projection: map embeddings to vocab logits
-        self.output_projection = np.random.randn(self.embedding_dim, self.vocab_size) * 0.02
+        # Output projection: map embeddings to vocab logits (MUCH smaller init)
+        self.output_projection = np.random.randn(self.embedding_dim, self.vocab_size) * 0.001
 
     def train(self, data_loader: LLMDataLoader, num_iterations: int = None):
         """
@@ -362,23 +362,21 @@ class K1LanguageModel:
         self._finalize_training(data_loader)
 
     def _training_step(self, batch_x, batch_y, data_loader):
-        """Execute one training step (OPTIMIZED FOR SPEED)."""
+        """Execute one training step (PROPER LEARNING)."""
         batch_size, seq_len = batch_x.shape
         total_loss = 0.0
         total_log_prob = 0.0
         total_tokens = 0
 
-        # Sample just a few sequences per batch for speed
-        sample_size = min(4, batch_size)  # Only process 4 sequences
+        # Process ALL sequences (for proper learning)
+        sample_size = min(8, batch_size)  # Process 8 sequences (was 4)
 
         for i in range(sample_size):
             seq_loss = 0.0
             seq_log_prob = 0.0
 
-            # Sample a few tokens per sequence for speed
-            token_indices = np.random.choice(seq_len, size=min(8, seq_len), replace=False)
-
-            for t in token_indices:
+            # Process ALL tokens (not sampling) for proper learning
+            for t in range(seq_len):
                 # Embed current token
                 current_token_idx = batch_x[i, t]
                 x = self.embeddings[current_token_idx]
@@ -408,13 +406,13 @@ class K1LanguageModel:
                 seq_loss += loss
                 seq_log_prob += np.log(prob_target)
 
-                # Update more frequently for actual learning
-                if np.random.random() < 0.5:  # 50% of the time (was 10%)
+                # Update EVERY 10th token for consistent learning
+                if t % 10 == 0:
                     activated_agents = routing_path.get_activated_agents()
                     if activated_agents and len(activated_agents) > 0:
-                        # Update more agents for better learning
-                        num_to_update = min(5, len(activated_agents))  # 5 agents (was 2)
-                        agents_to_update = activated_agents[:num_to_update] if len(activated_agents) <= num_to_update else np.random.choice(activated_agents, size=num_to_update, replace=False)
+                        # Update TOP 3 agents only
+                        num_to_update = min(3, len(activated_agents))
+                        agents_to_update = activated_agents[:num_to_update]
 
                         for agent in agents_to_update:
                             # Compute gradient
@@ -422,20 +420,20 @@ class K1LanguageModel:
                                 agent, x, np.array([target_idx]), hidden
                             )
 
-                            # CRITICAL: Clip gradient to prevent explosion
+                            # CRITICAL: Clip gradient more aggressively
                             for key in gradient:
                                 if gradient[key] is not None:
-                                    gradient[key] = np.clip(gradient[key], -1.0, 1.0)
+                                    gradient[key] = np.clip(gradient[key], -0.1, 0.1)  # Much smaller!
 
                             # Update with clipped gradient
                             self.weight_updater.update_agent(agent, gradient)
 
                             # Trust update
-                            if loss < 10:  # Only reward reasonable losses
+                            if loss < 10:
                                 error_reduction = max(0, 10 - loss) / 10
                                 self.trust_system.report_success(agent, error_reduction)
 
-            num_tokens = len(token_indices)
+            num_tokens = seq_len
             total_loss += seq_loss / num_tokens
             total_log_prob += seq_log_prob / num_tokens
             total_tokens += num_tokens
