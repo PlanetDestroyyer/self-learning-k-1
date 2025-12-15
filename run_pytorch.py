@@ -493,14 +493,14 @@ def main():
 
     dataset = download_wikitext()
 
-    # Create tokenizer
-    all_texts = dataset['train']['text'] + dataset['validation']['text']
+    # Create tokenizer (convert to list first)
+    all_texts = list(dataset['train']['text']) + list(dataset['validation']['text'])
     tokenizer = SimpleTokenizer(all_texts)
     config['vocab_size'] = tokenizer.vocab_size
 
-    # Create datasets
-    train_dataset = WikiTextDataset(dataset['train']['text'], tokenizer, seq_len=config['max_seq_len'])
-    val_dataset = WikiTextDataset(dataset['validation']['text'], tokenizer, seq_len=config['max_seq_len'])
+    # Create datasets (convert to list)
+    train_dataset = WikiTextDataset(list(dataset['train']['text']), tokenizer, seq_len=config['max_seq_len'])
+    val_dataset = WikiTextDataset(list(dataset['validation']['text']), tokenizer, seq_len=config['max_seq_len'])
 
     print(f"Train sequences: {len(train_dataset)}")
     print(f"Val sequences: {len(val_dataset)}")
