@@ -60,7 +60,7 @@ class Agent:
             'b1': np.zeros(hidden_dim),
             'W2': np.random.randn(hidden_dim, output_dim) * np.sqrt(2.0 / hidden_dim),
             'b2': np.zeros(output_dim),
-            'routing': np.random.randn(output_dim, 20) * 0.01  # For child selection
+            'routing': np.random.randn(hidden_dim, 20) * 0.01  # For child selection (uses last_hidden)
         }
 
         # Trust and performance
@@ -166,7 +166,7 @@ class Agent:
 
         # Expand routing weights if needed
         if len(self._children_order) > self.weights['routing'].shape[1]:
-            new_routing = np.random.randn(self.output_dim, len(self._children_order) + 10) * 0.01
+            new_routing = np.random.randn(self.hidden_dim, len(self._children_order) + 10) * 0.01
             new_routing[:, :self.weights['routing'].shape[1]] = self.weights['routing']
             self.weights['routing'] = new_routing
 
