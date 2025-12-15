@@ -50,14 +50,14 @@ class K1SelfLearningLM:
         """
         self.config = config
 
-        # Model dimensions
+        # Model dimensions (support both 'embed_dim' and 'embedding_dim' keys)
         self.vocab_size = config.get('vocab_size', 10000)
-        self.embedding_dim = config.get('embedding_dim', 128)
-        self.hidden_dim = config.get('hidden_dim', 128)
+        self.embedding_dim = config.get('embed_dim', config.get('embedding_dim', 128))
+        self.hidden_dim = config.get('hidden_dim', 256)
 
-        # Training config
-        self.phase_1_duration = config.get('phase_1_duration', 10000)
-        self.max_iterations = config.get('max_iterations', 50000)
+        # Training config (support multiple key names)
+        self.phase_1_duration = config.get('phase1_steps', config.get('phase_1_duration', 5000))
+        self.max_iterations = config.get('max_steps', config.get('max_iterations', 10000))
 
         # Build hierarchy
         self.hierarchy = build_initial_hierarchy(
@@ -87,20 +87,36 @@ class K1SelfLearningLM:
 
     def _init_systems(self, config: Dict):
         """Initialize all subsystems."""
+        # Support both flat and nested config keys
+        def get_config(key, default, nested_path=None):
+            """Get config value supporting both flat and nested formats."""
+            # Try flat key first
+            if key in config:
+                return config[key]
+            # Try nested path
+            if nested_path:
+                val = config
+                for k in nested_path:
+                    val = val.get(k, {})
+                if val and val != {}:
+                    return val
+            return default
+
         # Trust system
         self.trust_system = TrustSystem(
-            error_penalty_multiplier=config.get('trust', {}).get('error_penalty', 0.95),
-            success_reward_multiplier=config.get('trust', {}).get('success_reward', 0.3),
-            success_reward_cap=config.get('trust', {}).get('reward_cap', 0.2),
-            cache_threshold=config.get('trust', {}).get('cache_threshold', 0.7)
+            error_penalty_multiplier=get_config('error_penalty', 0.95, ['trust', 'error_penalty']),
+            success_reward_multiplier=get_config('success_reward', 0.3, ['trust', 'success_reward']),
+            success_reward_cap=get_config('reward_cap', 0.2, ['trust', 'reward_cap']),
+            cache_threshold=get_config('cache_threshold', 0.7, ['trust', 'cache_threshold'])
         )
 
         # Router
+        exploration_rate = get_config('exploration_rate', 0.1, ['exploration', 'initial_rate'])
         self.router = HierarchicalRouter(
             hierarchy=self.hierarchy,
-            confidence_threshold=config.get('routing', {}).get('confidence_threshold', 0.5),
-            max_depth=config.get('routing', {}).get('max_depth', 6),
-            exploration_rate=config.get('exploration', {}).get('initial_rate', 0.1)
+            confidence_threshold=get_config('confidence_threshold', 0.5, ['routing', 'confidence_threshold']),
+            max_depth=get_config('max_depth', 6, ['routing', 'max_depth']),
+            exploration_rate=exploration_rate
         )
 
         # Forward pass
@@ -110,16 +126,18 @@ class K1SelfLearningLM:
         )
 
         # Backprop engine
+        learning_rate = get_config('learning_rate', 0.0001, ['learning', 'learning_rate'])
         self.backprop = BackpropEngine(
-            learning_rate=config.get('learning', {}).get('learning_rate', 0.0001),
-            gradient_clip=config.get('learning', {}).get('gradient_clip', 1.0),
+            learning_rate=learning_rate,
+            gradient_clip=get_config('gradient_clip', 1.0, ['learning', 'gradient_clip']),
             use_adam=True
         )
 
         # Credit assignment
+        top_k = get_config('top_k_routing', 3, ['learning', 'top_k'])
         self.credit = CreditAssignment(
             trust_system=self.trust_system,
-            top_k=config.get('learning', {}).get('top_k', 3)
+            top_k=top_k
         )
 
         # Structural systems
