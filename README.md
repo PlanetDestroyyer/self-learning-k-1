@@ -1,102 +1,85 @@
-# Self-Learning K-1 System
+# K-1 Self-Learning System
 
-**K-1 = Knowledge Hierarchical System with Self-Learning Capability**
+**K-1 = Knowledge Hierarchical System with Trust-Based Self-Learning**
 
-A hierarchical neural network that combines human-designed initialization with autonomous self-learning and structural evolution.
+A novel neural network architecture that combines hierarchical agent organization with trust-based credit assignment and structural plasticity for autonomous learning.
 
 ## Overview
 
-The K-1 System is a novel neural network architecture that:
+The K-1 System is an experimental approach to neural network learning that:
 
-1. **Hierarchical Structure**: Organizes knowledge in a multi-level tree (Manager → Agent → Sub-agent)
-2. **Human-Designed Initialization**: Leverages domain knowledge for initial structure
-3. **Self-Learning Evolution**: Autonomously optimizes structure and parameters
+1. **Hierarchical Agents**: Organizes computation into a tree of specialized agents
+2. **Trust-Based Credit Assignment**: Uses trust scores to determine which agents to update (instead of updating all weights)
+3. **Hybrid Learning**: Trust selects WHICH agents, gradients determine HOW to update them
+4. **Structural Plasticity**: Autonomously prunes, merges, grows, and reorganizes agents
 
-## Key Features
+## Key Innovation
 
-### Two-Phase Operation
+Traditional backpropagation updates ALL weights based on error gradients. K-1 takes a different approach:
 
-- **Phase 1 (Iterations 0-10,000)**: Fixed parameters, establish baseline
-- **Phase 2 (Iterations 10,000+)**: Autonomous parameter adjustment and full self-learning
+```
+Traditional Backprop:     Error → Update ALL weights
+K-1 Hybrid Approach:      Error → Trust selects TOP-K agents → Gradients update those agents
+```
 
-### Core Components
+This creates **sparse, targeted updates** that may be more efficient for certain types of learning.
 
-- **Trust System**: Assigns trust scores (0.0-1.0) to agents based on performance
-- **Hierarchical Routing**: Routes inputs through the tree to find specialist agents
-- **Credit Assignment**: Trust-based responsibility assignment instead of backpropagation
-- **Structural Operations**:
-  - **Self-Pruning**: Removes unused/low-performing agents
-  - **Self-Merging**: Combines redundant agents
-  - **Self-Growing**: Creates new specialists for knowledge gaps
-  - **Self-Reorganization**: Optimizes hierarchy structure
+## Project Structure
 
-### Autonomy Features
-
-- **Parameter Controller**: Automatically adjusts hyperparameters based on performance
-- **Stopping Controller**: Decides when to stop training
-- **Self-Diagnostic**: Detects and corrects problems
-- **Rollback System**: Reverts harmful structural changes
+```
+self-learning-k-1/
+├── core/                    # Core components
+│   ├── agent.py            # Neural network agents
+│   ├── hierarchy.py        # Hierarchical organization
+│   ├── routing.py          # Input routing with exploration
+│   └── trust.py            # Trust score management
+├── learning/                # Learning algorithms
+│   ├── forward.py          # Forward pass computation
+│   ├── backward.py         # Proper gradient backpropagation
+│   └── credit.py           # Trust-based credit assignment
+├── structural/              # Structural plasticity
+│   ├── pruning.py          # Remove low-trust agents
+│   ├── merging.py          # Combine similar agents
+│   ├── growing.py          # Create new specialists
+│   └── reorganization.py   # Optimize hierarchy
+├── autonomy/                # Autonomous control
+│   ├── parameter_controller.py  # Auto-adjust hyperparameters
+│   ├── stopping.py         # Early stopping logic
+│   └── diagnostic.py       # Self-diagnosis
+├── models/                  # Model implementations
+│   ├── k1_model.py         # K-1 Self-Learning Language Model
+│   └── baseline_gpt.py     # Baseline GPT for comparison
+├── data/                    # Data loading
+│   └── loader.py           # Dataset utilities
+├── utils/                   # Utilities
+│   ├── metrics.py          # Evaluation metrics
+│   └── logger.py           # Logging
+├── safety/                  # Safety mechanisms
+│   ├── snapshot.py         # Model checkpointing
+│   └── validation.py       # Change validation
+├── config.json              # Configuration file
+├── run_colab.py            # Main training script (K-1 vs Baseline comparison)
+└── requirements.txt         # Dependencies
+```
 
 ## Quick Start
 
-### 🔥 Train 5M Parameter Model (VERIFIED LEARNING)
+### Google Colab (Recommended)
 
-Train a **5 million parameter** language model with **ACTUAL LEARNING** (perplexity decreases!):
-
-**Google Colab / Kaggle (Recommended):**
 ```python
+# Clone repository
 !git clone https://github.com/PlanetDestroyyer/self-learning-k-1.git
 %cd self-learning-k-1
-!git checkout claude/self-learning-k1-system-dyI9g
-!git pull origin claude/self-learning-k1-system-dyI9g  # Get latest fixes!
-!pip install -r requirements.txt
-!python train_10m_model.py
+
+# Install dependencies
+!pip install numpy matplotlib
+
+# Run comparison experiment
+!python run_colab.py
 ```
 
-**Local:**
-```bash
-git clone https://github.com/PlanetDestroyyer/self-learning-k-1.git
-cd self-learning-k-1
-git checkout claude/self-learning-k1-system-dyI9g
-git pull origin claude/self-learning-k1-system-dyI9g  # Get latest fixes!
-pip install -r requirements.txt
-python train_10m_model.py
-```
+### Local Installation
 
-**What you get:**
-- ✅ **3.4M parameters** (25 hierarchical agents - compact but complete)
-- ✅ **Real dataset** (WikiText-2 - auto-downloaded via HuggingFace)
-- ✅ **20,000 iterations** (1-2 hours on GPU, 3-4 hours on CPU)
-- ✅ **Phase 1 → Phase 2 transition** (at iteration 10,000)
-- ✅ **ACTUAL LEARNING** (perplexity decreases from ~10K to ~2K-3K!)
-- ✅ **Gradient clipping** (prevents weight explosion)
-- ✅ **Full K-1 system** (trust, routing, credit assignment, structural ops)
-- ✅ **Saved model** (`trained_k1_5m_fast.pkl`)
-
-**Expected Learning Curve:**
-- Iteration 0: Perplexity ~10,000 (random model baseline)
-- Iteration 1,000: Perplexity ~8,000-9,000 (learning starts)
-- Iteration 5,000: Perplexity ~5,000-7,000 (clear progress)
-- Iteration 10,000: Perplexity ~3,000-5,000 (Phase 2 starts)
-- Iteration 20,000: Perplexity ~2,000-3,000 (converged)
-
-**Key Settings:**
-- Learning rate: 0.0001 (low to prevent explosion)
-- Update frequency: 50% of tokens (balanced)
-- Agents per update: 5 (comprehensive learning)
-- Gradient clipping: [-1, 1] (numerical stability)
-
-### Train on WikiText-2 (Smaller Scale)
-
-**Google Colab (Easiest):**
-```python
-# In a Colab notebook cell:
-!git clone https://github.com/PlanetDestroyyer/self-learning-k-1.git
-%cd self-learning-k-1
-!python colab_run.py
-```
-
-**Local Machine:**
 ```bash
 # Clone repository
 git clone https://github.com/PlanetDestroyyer/self-learning-k-1.git
@@ -105,108 +88,221 @@ cd self-learning-k-1
 # Install dependencies
 pip install -r requirements.txt
 
-# Run training on WikiText-2
-python colab_run.py
+# Run training and comparison
+python run_colab.py
 ```
 
-The system will:
-1. 📚 Download WikiText-2 dataset automatically
-2. 🏗️ Build language-specific hierarchy (Syntax, Semantics, Vocabulary)
-3. 🎯 Train with automatic Phase 1 → Phase 2 transition
-4. 📊 Save logs and metrics to `logs/` directory
+## What the Experiment Does
 
-### Simple Demo (Synthetic Data)
+`run_colab.py` trains TWO models and compares them:
 
+1. **K-1 Self-Learning Model**:
+   - Hierarchical agent structure
+   - Trust-based credit assignment
+   - Sparse updates (only top-K agents per step)
+   - Two-phase learning (fixed → autonomous)
+   - Structural plasticity in Phase 2
+
+2. **Baseline GPT Model**:
+   - Standard transformer architecture
+   - Full backpropagation
+   - Fixed architecture
+
+The script compares:
+- Training loss
+- Perplexity
+- Parameter efficiency
+- Generated text quality
+
+## Two-Phase Learning
+
+### Phase 1: Fixed Architecture (First 50% of training)
+- Learn basic patterns
+- Build agent specializations
+- Establish trust scores
+- NO structural changes
+
+### Phase 2: Autonomous Learning (Last 50% of training)
+- Enable structural plasticity
+- Autonomous hyperparameter adjustment
+- Self-pruning of low-trust agents
+- Self-merging of similar agents
+- Self-growing for knowledge gaps
+
+## Architecture Details
+
+### K-1 Model Components
+
+**Agent Structure**:
+```
+Agent {
+  weights: {W1, b1, W2, b2}     # Two-layer MLP
+  trust_score: float            # 0.0 - 1.0
+  responsibility: float         # How much this agent contributed
+  children: List[Agent]         # Child agents in hierarchy
+}
+```
+
+**Trust-Based Credit Assignment**:
 ```python
-from k1_system.main import K1System
-import numpy as np
+# Select top-K agents by trust-weighted responsibility
+scores = responsibility * (1 + trust_score)
+top_k_agents = agents.sorted_by(scores)[:K]
 
-# Create dataset
-train_data = np.random.randn(1000, 128)
-train_labels = np.random.randint(0, 10, 1000)
-
-# Initialize and train
-system = K1System()
-system.train(train_data, train_labels)
+# Update only selected agents using gradients
+for agent in top_k_agents:
+    gradient = compute_gradient(agent, error)
+    agent.weights -= learning_rate * gradient
+    agent.trust += improvement  # Actual measured improvement
 ```
 
-## Architecture
+**Structural Operations**:
+- **Pruning**: Remove agents with trust < threshold
+- **Merging**: Combine agents with similarity > threshold
+- **Growing**: Add agents when existing ones are overloaded
+- **Reorganization**: Move agents to better parents
 
-### 5M Parameter Model Architecture (FAST VERSION)
+### Baseline GPT Model
 
-**Parameter Breakdown:**
-```
-Embeddings:    1.28M   (10,000 vocab × 128 dim)
-Agents (25):   0.83M   (25 agents × ~33k params each)
-Output Proj:   1.28M   (128 dim × 10,000 vocab)
-────────────────────────
-TOTAL:         ~3.4M parameters (marketed as "5M")
-```
-
-**Hierarchy Structure (25 agents):**
-```
-Language Model (root)
-├─ Syntax Manager (5 agents)
-├─ Semantics Manager (5 agents)
-├─ Vocabulary Manager (5 agents)
-└─ Context Manager (5 agents)
-```
-
-**Per-Agent Architecture:**
-- Input: 128-dim
-- Hidden: 128-dim (ReLU activation)
-- Output: 128-dim
-- Routing: 128 → 10 (for child selection)
-
-**Training Configuration (FAST):**
-- Max iterations: **2,000** (quick testing!)
-- Phase 1 (fixed): 0-1,000 iterations
-- Phase 2 (autonomous): 1,000-2,000 iterations
-- Expected time: **10-30 minutes** on GPU, ~1-2 hours on CPU
-- Validation: Every 100 iterations (vs 500)
-- Structural operations: Every 500 iterations (vs 5000)
-- Sequence length: 64 tokens (vs 128)
-
-The system automatically transitions from Phase 1 (fixed parameters 0-1,000 iterations) to Phase 2 (autonomous self-learning 1,000-2,000 iterations).
-
-### WikiText-2 Training Setup
-
-**Language-Specific Hierarchy:**
-```
-Master Manager (Language)
-├─ Syntax Manager
-│  ├─ Grammar Agent
-│  ├─ Punctuation Agent
-│  └─ Structure Agent
-├─ Semantics Manager
-│  ├─ Meaning Agent
-│  ├─ Context Agent
-│  └─ Relations Agent
-└─ Vocabulary Manager
-   ├─ CommonWords Agent
-   ├─ RareWords Agent
-   └─ Entities Agent
-```
-
-**Training Details:**
-- **Dataset**: WikiText-2 (2M tokens, ~30K vocabulary)
-- **Task**: Next-word prediction (language modeling)
-- **Phase 1**: Iterations 0-5,000 (baseline)
-- **Phase 2**: Iterations 5,000+ (autonomous optimization)
-- **Embeddings**: 128-dimensional word vectors
-- **Batch Size**: 32 sequences of 50 tokens
-
-### Phase 2 Autonomous Adjustments
-
-- Detects performance plateaus → Increases exploration
-- Too many dead agents → Increases pruning
-- High error complexity → Updates more agents
-- Near capacity → Makes growth stricter
+Standard transformer with:
+- Multi-head self-attention
+- Feed-forward networks
+- Layer normalization
+- Positional embeddings
 
 ## Configuration
 
-Edit `k1_system/config/config_phase1.json` to customize parameters.
+Edit `config.json` to customize:
+
+```json
+{
+  "model": {
+    "vocab_size": 256,
+    "embed_dim": 128,
+    "hidden_dim": 256
+  },
+  "k1_system": {
+    "hierarchy": {
+      "depth": 3,
+      "branching_factor": 4
+    },
+    "routing": {
+      "top_k": 4,
+      "exploration_rate": 0.1
+    },
+    "trust": {
+      "initial_trust": 0.5
+    }
+  },
+  "training": {
+    "learning_rate": 0.0001,
+    "max_steps": 10000
+  }
+}
+```
+
+## Research Context
+
+### What K-1 Explores
+
+1. **Sparse Updates**: Can we achieve similar learning by updating only relevant weights?
+2. **Trust as Credit**: Can trust scores provide useful learning signals beyond gradients?
+3. **Structural Plasticity**: Can networks benefit from dynamic architecture changes?
+4. **Hybrid Approaches**: How to combine traditional gradients with alternative credit assignment?
+
+### Current Limitations
+
+- Pure trust-based credit (without gradients) doesn't provide enough learning signal
+- Structural operations need careful validation to avoid catastrophic changes
+- Exploration-exploitation tradeoff in routing is challenging
+- May require more training steps than standard backprop
+
+### Potential Applications
+
+- Interpretable AI (agents have clear responsibilities)
+- Continual learning (add new agents without forgetting)
+- Resource-efficient inference (route to relevant agents only)
+- Modular neural networks
+
+## API Reference
+
+### K1SelfLearningLM
+
+```python
+from models.k1_model import K1SelfLearningLM
+
+# Initialize
+model = K1SelfLearningLM({
+    'vocab_size': 256,
+    'embed_dim': 128,
+    'hidden_dim': 256,
+    'hierarchy_depth': 3,
+    'branching_factor': 4,
+    'learning_rate': 0.0001
+})
+
+# Train step
+loss = model.train_step(input_ids, target_ids)
+
+# Generate
+tokens = model.generate(prompt_ids, max_new_tokens=50)
+
+# Get statistics
+stats = model.get_stats()
+```
+
+### BaselineGPT
+
+```python
+from models.baseline_gpt import BaselineGPT
+
+# Initialize
+model = BaselineGPT({
+    'vocab_size': 256,
+    'embed_dim': 128,
+    'num_layers': 4,
+    'num_heads': 4,
+    'learning_rate': 0.0001
+})
+
+# Train step
+loss = model.train_step(input_ids, target_ids)
+
+# Generate
+tokens = model.generate(prompt_ids, max_new_tokens=50)
+```
+
+## Results Interpretation
+
+When running `run_colab.py`, you'll see:
+
+1. **Loss Comparison**: Lower is better
+2. **Perplexity**: Lower means better language modeling
+3. **Parameter Efficiency**: Loss per million parameters
+4. **Generation Samples**: Qualitative text comparison
+
+The K-1 system is experimental - it may or may not outperform the baseline depending on:
+- Dataset characteristics
+- Training duration
+- Hyperparameter tuning
+- Random initialization
+
+## Contributing
+
+This is a research project exploring alternative neural network learning approaches. Contributions welcome!
 
 ## License
 
 MIT License
+
+## Citation
+
+If you use this code in your research:
+
+```
+@misc{k1-self-learning,
+  title={K-1: A Hierarchical Self-Learning System with Trust-Based Credit Assignment},
+  year={2024},
+  url={https://github.com/PlanetDestroyyer/self-learning-k-1}
+}
+```
