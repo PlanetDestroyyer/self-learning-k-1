@@ -23,8 +23,29 @@ from models.baseline_gpt import BaselineGPT
 # Data Loading
 # =============================================================================
 
+def load_wikitext() -> str:
+    """Download and load WikiText-2 dataset."""
+    print("Loading WikiText-2 dataset...")
+    try:
+        from datasets import load_dataset
+        dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
+        # Join train, validation, and test sets
+        train_text = "\n".join(dataset['train']['text'])
+        val_text = "\n".join(dataset['validation']['text'])
+        test_text = "\n".join(dataset['test']['text'])
+        
+        print(f"Loaded WikiText-2: {len(train_text):,} train chars, {len(val_text):,} val chars")
+        return train_text, val_text, test_text
+    except ImportError:
+        print("Error: 'datasets' library not found. Please run: pip install datasets")
+        print("Falling back to Tiny Shakespeare...")
+        return download_tiny_shakespeare(), "", ""
+    except Exception as e:
+        print(f"Error loading WikiText: {e}")
+        return download_tiny_shakespeare(), "", ""
+
 def download_tiny_shakespeare() -> str:
-    """Download or load Tiny Shakespeare dataset."""
+    """Download or load Tiny Shakespeare dataset (Fallback)."""
     import urllib.request
     import os
 
@@ -48,57 +69,53 @@ def download_tiny_shakespeare() -> str:
         return text
     except Exception as e:
         print(f"Download failed: {e}")
-        print("Using synthetic data instead...")
-        return generate_synthetic_data()
+        return ""
 
 
-def generate_synthetic_data(size: int = 100000) -> str:
-    """Generate synthetic text data for testing."""
-    patterns = [
-        "The quick brown fox jumps over the lazy dog. ",
-        "To be or not to be, that is the question. ",
-        "All that glitters is not gold. ",
-        "A journey of a thousand miles begins with a single step. ",
-        "Knowledge is power, but wisdom is supreme. ",
-    ]
-    text = ""
-    while len(text) < size:
-        text += np.random.choice(patterns)
-    return text[:size]
 
+def prepare_data(text_data, config: Dict) -> Tuple[List, List, List, Dict, Dict]:
+    """Prepare training, validation, and test data."""
+    
+    if isinstance(text_data, tuple):
+        train_text, val_text, test_text = text_data
+        # If fallback matched only one return
+        if not val_text:
+             # Manual split
+             n = len(train_text)
+             train_split = int(n * 0.9)
+             val_split = int(n * 0.95)
+             test_text = train_text[val_split:]
+             val_text = train_text[train_split:val_split]
+             train_text = train_text[:train_split]
+    else:
+        # Should not happen with new loader, but safe fallback
+        n = len(text_data)
+        train_split = int(n * 0.9)
+        val_split = int(n * 0.95)
+        test_text = text_data[val_split:]
+        val_text = text_data[train_split:val_split]
+        train_text = text_data[:train_split]
 
-def prepare_data(text: str, config: Dict) -> Tuple[List, List, List, Dict, Dict]:
-    """Prepare training, validation, and test data.
-
-    Returns:
-        train_data, val_data, test_data, char_to_idx, idx_to_char
-    """
-    # Build vocabulary
-    chars = sorted(list(set(text)))
+    # Build vocabulary from ALL data
+    full_text = train_text + val_text + test_text
+    chars = sorted(list(set(full_text)))
     vocab_size = len(chars)
     print(f"Vocabulary size: {vocab_size} characters")
 
     char_to_idx = {ch: i for i, ch in enumerate(chars)}
     idx_to_char = {i: ch for i, ch in enumerate(chars)}
 
-    # Encode text
-    encoded = np.array([char_to_idx[ch] for ch in text])
-
-    # Split data
-    n = len(encoded)
-    train_split = int(n * config['data']['train_split'])
-    val_split = int(n * (config['data']['train_split'] + config['data']['val_split']))
-
-    train_encoded = encoded[:train_split]
-    val_encoded = encoded[train_split:val_split]
-    test_encoded = encoded[val_split:]
+    # Encode
+    train_encoded = np.array([char_to_idx[ch] for ch in train_text])
+    val_encoded = np.array([char_to_idx[ch] for ch in val_text])
+    test_encoded = np.array([char_to_idx[ch] for ch in test_text])
 
     # Create sequences
     seq_len = config['model']['max_seq_len']
 
     def create_sequences(data):
         sequences = []
-        for i in range(0, len(data) - seq_len - 1, seq_len // 2):
+        for i in range(0, len(data) - seq_len - 1, seq_len): # Non-overlapping for speed? or seq_len // 2
             x = data[i:i + seq_len]
             y = data[i + 1:i + seq_len + 1]
             if len(x) == seq_len and len(y) == seq_len:
@@ -479,9 +496,9 @@ def main():
             },
             'training': {
                 'learning_rate': 0.0001,
-                'max_steps': 5000,
+                'max_steps': 10000,
                 'log_every': 100,
-                'eval_every': 500
+                'eval_every': 1000
             },
             'k1_system': {
                 'hierarchy': {'depth': 3, 'branching_factor': 4},
@@ -497,10 +514,10 @@ def main():
 
     # Load data
     print("\n" + "-" * 40)
-    print("Loading Data")
+    print("Loading Data (WikiText-2)")
     print("-" * 40)
-    text = download_tiny_shakespeare()
-    train_data, val_data, test_data, char_to_idx, idx_to_char = prepare_data(text, config)
+    text_data = load_wikitext()
+    train_data, val_data, test_data, char_to_idx, idx_to_char = prepare_data(text_data, config)
 
     # Update vocab size based on actual data
     actual_vocab_size = len(char_to_idx)
@@ -518,6 +535,9 @@ def main():
     k1_config = config
     k1_config['hierarchy_depth'] = config['k1_system']['hierarchy']['depth']
     k1_config['branching_factor'] = config['k1_system']['hierarchy']['branching_factor']
+    # Phase 2 starts at step 2000 (20%)
+    k1_config['phase1_steps'] = 2000
+    k1_config['phase2_steps'] = 8000
     
     k1_model = K1GPUModel(k1_config)
     k1_stats = k1_model.get_stats()
