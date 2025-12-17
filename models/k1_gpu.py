@@ -66,6 +66,10 @@ class K1GPUModel(nn.Module):
         Forward pass.
         x_indices: (Batch_Size, Seq_Len) or (Batch_Size,)
         """
+
+        if isinstance(x_indices, np.ndarray):
+             x_indices = torch.from_numpy(x_indices).long().to(self.device)
+
         if x_indices.dim() == 2:
             # Flatten sequence: treat (Batch, Seq) as (Batch*Seq)
             B, T = x_indices.shape

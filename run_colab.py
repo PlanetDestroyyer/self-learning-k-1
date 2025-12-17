@@ -249,6 +249,8 @@ def evaluate_model(model: K1GPUModel, data: List) -> float:
     total_loss = 0.0
     for x, y in data:
         logits = model.forward(x)
+        if hasattr(logits, 'cpu'):
+            logits = logits.detach().cpu().numpy()
         # Softmax
         exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
         probs = exp_logits / (np.sum(exp_logits, axis=-1, keepdims=True) + 1e-10)
