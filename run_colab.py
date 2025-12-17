@@ -622,6 +622,12 @@ def main():
     print("Initializing K-1 GPU Model...")
     
     k1_config = config
+    # Flatten model config for K1GPUModel which expects keys at root
+    k1_config['vocab_size'] = config['model']['vocab_size']
+    k1_config['embed_dim'] = config['model']['embed_dim']
+    k1_config['hidden_dim'] = config['model']['hidden_dim']
+    k1_config['learning_rate'] = config['training']['learning_rate']
+    
     k1_config['hierarchy_depth'] = config['k1_system']['hierarchy']['depth']
     k1_config['branching_factor'] = config['k1_system']['hierarchy']['branching_factor']
     
