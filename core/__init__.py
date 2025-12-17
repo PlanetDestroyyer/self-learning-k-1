@@ -1,8 +1,5 @@
-"""Core components for K-1 Self-Learning System."""
+"""Core components for K-1 Self-Learning System (GPU Version)."""
 
-from .agent import Agent
-from .hierarchy import Hierarchy
-from .routing import HierarchicalRouter, RoutingPath
-from .trust import TrustSystem, TrustCache
+from .gpu_hierarchy import GPUHierarchy
 
-__all__ = ['Agent', 'Hierarchy', 'HierarchicalRouter', 'RoutingPath', 'TrustSystem', 'TrustCache']
+__all__ = ['GPUHierarchy']

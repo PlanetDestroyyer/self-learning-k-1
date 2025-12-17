@@ -16,7 +16,7 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 
 # Import our models
-from models.k1_model import K1SelfLearningLM
+# from models.k1_model import K1SelfLearningLM
 from models.baseline_gpt import BaselineGPT
 
 # =============================================================================
@@ -120,7 +120,9 @@ def prepare_data(text: str, config: Dict) -> Tuple[List, List, List, Dict, Dict]
 # Training Functions
 # =============================================================================
 
-def train_k1_model(model: K1SelfLearningLM, train_data: List, val_data: List,
+from models.k1_gpu import K1GPUModel
+
+def train_k1_model(model: K1GPUModel, train_data: List, val_data: List,
                    config: Dict, verbose: bool = True) -> Dict:
     """Train the K-1 Self-Learning model.
 
@@ -242,7 +244,7 @@ def train_baseline_model(model: BaselineGPT, train_data: List, val_data: List,
     return history
 
 
-def evaluate_model(model: K1SelfLearningLM, data: List) -> float:
+def evaluate_model(model: K1GPUModel, data: List) -> float:
     """Evaluate K-1 model on data."""
     total_loss = 0.0
     for x, y in data:
@@ -287,7 +289,7 @@ class ComparisonResults:
     baseline_sample: str
 
 
-def compare_models(k1_model: K1SelfLearningLM, baseline_model: BaselineGPT,
+def compare_models(k1_model: K1GPUModel, baseline_model: BaselineGPT,
                    k1_history: Dict, baseline_history: Dict,
                    test_data: List, idx_to_char: Dict,
                    config: Dict) -> ComparisonResults:
@@ -507,23 +509,17 @@ def main():
     print("Initializing Models")
     print("-" * 40)
 
-    # K-1 Model
-    k1_config = {
-        'vocab_size': actual_vocab_size,
-        'embed_dim': config['model']['embed_dim'],
-        'hidden_dim': config['model']['hidden_dim'],
-        'hierarchy_depth': config['k1_system']['hierarchy']['depth'],
-        'branching_factor': config['k1_system']['hierarchy']['branching_factor'],
-        'top_k_routing': config['k1_system']['routing']['top_k'],
-        'learning_rate': config['training']['learning_rate'],
-        'exploration_rate': config['k1_system']['routing']['exploration_rate'],
-        'initial_trust': config['k1_system']['trust']['initial_trust'],
-        'phase1_steps': config['training']['max_steps'] // 2,
-        'phase2_steps': config['training']['max_steps'] // 2
-    }
-    k1_model = K1SelfLearningLM(k1_config)
+    # K-1 Model (GPU)
+    from models.k1_gpu import K1GPUModel
+    print("Initializing K-1 GPU Model...")
+    
+    k1_config = config
+    k1_config['hierarchy_depth'] = config['k1_system']['hierarchy']['depth']
+    k1_config['branching_factor'] = config['k1_system']['hierarchy']['branching_factor']
+    
+    k1_model = K1GPUModel(k1_config)
     k1_stats = k1_model.get_stats()
-    print(f"K-1 Model: {k1_stats['total_parameters']:,} parameters, {k1_stats['num_agents']} agents")
+    print(f"K-1 GPU Model: {k1_stats['total_parameters']:,} parameters, {k1_stats['num_agents']} agents")
 
     # Baseline Model
     baseline_config = {

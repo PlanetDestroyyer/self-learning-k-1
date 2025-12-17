@@ -1,7 +1,6 @@
-"""Learning components for K-1 Self-Learning System."""
+"""Learning components for K-1 Self-Learning System (GPU Version).
 
-from .backward import BackpropEngine
-from .forward import ForwardPass
-from .credit import CreditAssignment
+Legacy CPU components have been removed.
+"""
 
-__all__ = ['BackpropEngine', 'ForwardPass', 'CreditAssignment']
+__all__ = []
