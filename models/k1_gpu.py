@@ -106,6 +106,10 @@ class K1GPUModel(nn.Module):
             
             # Map local child index (0..3) to global agent index
             # children_table: (Batch, Max_Children)
+            
+            # Safety Check: Ensure curr_agents are within bounds
+            curr_agents = torch.clamp(curr_agents, 0, self.hierarchy.max_agents - 1)
+            
             children_table = self.hierarchy.get_children(curr_agents) 
             
             # Gather the global index
