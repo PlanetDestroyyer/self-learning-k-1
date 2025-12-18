@@ -114,7 +114,7 @@ class Agent(nn.Module):
         
         return output
     
-    def update_weights_local(self, error: torch.Tensor, learning_rate: float, 
+    def update_weights_local(self, error_magnitude: float, learning_rate: float, 
                             contribution_score: float):
         """
         Hybrid: Local gradients + contribution weighting.
@@ -136,9 +136,12 @@ class Agent(nn.Module):
         output = self.forward(self.last_input.requires_grad_(True))
         
         # Loss for this agent's contribution (weighted by trust and contribution)
-        # Higher trust and contribution = stronger update signal
-        weight = contribution_score * self.trust
-        agent_loss = (error.detach() * output).mean() * weight
+        # Use MSE between current output and desired output (zero error)
+        # Higher error_magnitude means this agent should push output closer to zero
+        weight = contribution_score * self.trust * error_magnitude
+        
+        # Simple loss: penalize large activations when error is high
+        agent_loss = (output ** 2).mean() * weight
         
         # Backward ONLY through this agent
         agent_loss.backward()
@@ -525,8 +528,10 @@ class K1CompleteSystem(nn.Module):
             y.reshape(-1)
         )
         
-        # Compute contributions
+        # Compute error magnitude for contribution scoring
         error = logits - F.one_hot(y, self.vocab_size).float()
+        error_magnitude = error.abs().mean().item()
+        
         contributions = self.trust_system.compute_contributions(
             all_active_agents, error
         )
@@ -537,7 +542,7 @@ class K1CompleteSystem(nn.Module):
         # Update only selected agents (SPARSE UPDATES!)
         for agent, contribution_score in top_k_agents:
             agent.update_weights_local(
-                error=error,
+                error_magnitude=error_magnitude,
                 learning_rate=self.learning_rate,
                 contribution_score=contribution_score
             )
