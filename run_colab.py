@@ -20,7 +20,7 @@ import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 # Import our models
-# from models.k1_model import K1SelfLearningLM
+from models.k1_complete import create_k1_complete_model
 from models.baseline_gpt_pytorch import BaselineGPTPyTorch
 
 # =============================================================================
@@ -157,13 +157,13 @@ def prepare_data(text_data, config: Dict) -> Tuple[List, List, List, Dict, Dict]
 # Training Functions
 # =============================================================================
 
-from models.k1_gpu import K1GPUModel
+from models.k1_complete import K1CompleteSystem
 
-def train_k1_model(model: K1GPUModel, train_loader: DataLoader, val_loader: DataLoader,
+def train_k1_model(model: K1CompleteSystem, train_loader: DataLoader, val_loader: DataLoader,
                    config: Dict, verbose: bool = True) -> Dict:
-    """Train the K-1 Self-Learning model."""
+    """Train the K-1 Complete Self-Learning model with trust-based updates."""
     print("\n" + "=" * 60)
-    print("Training K-1 Self-Learning Model")
+    print("Training K-1 Complete Model (Trust-Based Sparse Updates)")
     print("=" * 60)
 
     max_steps = config['training']['max_steps']
@@ -173,8 +173,10 @@ def train_k1_model(model: K1GPUModel, train_loader: DataLoader, val_loader: Data
     history = {
         'train_loss': [],
         'val_loss': [],
-        'trust_updates': [],
-        'structural_changes': [],
+        'improvement': [],
+        'num_updated_agents': [],
+        'active_agents': [],
+        'avg_trust': [],
         'phase': []
     }
 
@@ -190,46 +192,31 @@ def train_k1_model(model: K1GPUModel, train_loader: DataLoader, val_loader: Data
             step += 1
             if step > max_steps:
                 break
-                
-            # Move to device (handled inside model if numpy, but here it's tensor)
-            # x_batch, y_batch are already tensors from DataLoader
-
-            # Training step (model accepts tensors now)
-            # Note: train_step currently takes numpy, we should optimize this or use forward/backward directly
-            # For now, let's just pass tensors and ensure train_step handles them or we adapt
             
-            # Adapting to efficient direct call to avoid overhead
-            model.train()
-            model.optimizer.zero_grad()
+            # K-1 trust-based training step
+            metrics = model.train_step(x_batch, y_batch)
             
-            x_b = x_batch.to(model.device)
-            y_b = y_batch.to(model.device)
-            
-            logits = model.forward(x_b)
-            loss_tensor = torch.nn.functional.cross_entropy(logits.reshape(-1, model.vocab_size), y_b.reshape(-1))
-            loss_tensor.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            model.optimizer.step()
-            
-            loss = loss_tensor.item()
-            history['train_loss'].append(loss)
-
-            # Get current phase
-            phase = model.get_current_phase()
-            history['phase'].append(phase)
+            # Record metrics
+            history['train_loss'].append(metrics['loss'])
+            history['improvement'].append(metrics['improvement'])
+            history['num_updated_agents'].append(metrics['num_updated_agents'])
+            history['active_agents'].append(metrics['total_active_agents'])
+            history['avg_trust'].append(metrics['avg_trust'])
+            history['phase'].append(metrics['phase'])
 
             # Logging
             if step % log_every == 0 and verbose:
                 stats = model.get_stats()
                 elapsed = time.time() - start_time
-                print(f"Step {step:5d} (Ep {epoch}) | Loss: {loss:.4f} | "
-                      f"Agents: {stats['num_agents']} | "
-                      f"Phase: {phase} | "
+                print(f"Step {step:5d} (Ep {epoch}) | Loss: {metrics['loss']:.4f} | "
+                      f"Updated: {metrics['num_updated_agents']}/{metrics['total_active_agents']} agents | "
+                      f"Trust: {metrics['avg_trust']:.3f} | "
+                      f"Phase: {metrics['phase']} | "
                       f"Time: {elapsed:.1f}s")
 
             # Evaluation
             if step % eval_every == 0:
-                val_loss = evaluate_model(model, val_loader)
+                val_loss = evaluate_k1_model(model, val_loader)
                 history['val_loss'].append(val_loss)
 
                 if val_loss < best_val_loss:
@@ -239,9 +226,37 @@ def train_k1_model(model: K1GPUModel, train_loader: DataLoader, val_loader: Data
                     print(f"  Val Loss: {val_loss:.4f} | Best: {best_val_loss:.4f}")
 
     total_time = time.time() - start_time
-    print(f"\nK-1 Training completed in {total_time:.1f}s")
+    print("\nK-1 Training completed in {total_time:.1f}s")
+    
+    # Print trust system summary
+    final_stats = model.get_stats()
+    print("\nFinal Trust System Stats:")
+    print(f"  High-trust agents: {final_stats['high_trust_agents']}")
+    print(f"  Avg trust: {final_stats['avg_trust']:.3f}")
 
     return history
+
+
+def evaluate_k1_model(model, dataloader: DataLoader, max_batches: int = 20) -> float:
+    """Evaluate K-1 complete model on data."""
+    model.eval()
+    total_loss = 0.0
+    count = 0
+    with torch.no_grad():
+        for i, (x, y) in enumerate(dataloader):
+            if i >= max_batches:
+                break
+            
+            x = x.to(model.device)
+            y = y.to(model.device)
+            
+            logits = model.forward(x)
+            loss = torch.nn.functional.cross_entropy(logits.reshape(-1, model.vocab_size), y.reshape(-1))
+            total_loss += loss.item()
+            count += 1
+    
+    model.train()
+    return total_loss / count if count > 0 else 0.0
 
 
 def train_baseline_model(model: BaselineGPTPyTorch, train_loader: DataLoader, val_loader: DataLoader,
@@ -373,7 +388,9 @@ class ComparisonResults:
     baseline_sample: str
 
 
-def compare_models(k1_model: K1GPUModel, baseline_model: BaselineGPTPyTorch,
+from models.k1_complete import K1CompleteSystem
+
+def compare_models(k1_model: K1CompleteSystem, baseline_model: BaselineGPTPyTorch,
                    k1_history: Dict, baseline_history: Dict,
                    test_data: List, idx_to_char: Dict,
                    config: Dict) -> ComparisonResults:
@@ -594,28 +611,24 @@ def main():
     print("Initializing Models")
     print("-" * 40)
 
-    # K-1 Model (GPU)
-    from models.k1_gpu import K1GPUModel
-    print("Initializing K-1 GPU Model...")
+    # K-1 Complete Model (Trust-based, Sparse Updates)
+    print("Initializing K-1 Complete Model with Trust System...")
     
-    k1_config = config
-    # Flatten model config for K1GPUModel which expects keys at root
-    k1_config['vocab_size'] = config['model']['vocab_size']
-    k1_config['embed_dim'] = config['model']['embed_dim']
-    k1_config['hidden_dim'] = config['model']['hidden_dim']
-    k1_config['learning_rate'] = config['training']['learning_rate']
+    k1_config = {
+        'vocab_size': actual_vocab_size,
+        'embed_dim': config['model']['embed_dim'],
+        'hidden_dim': config['model']['hidden_dim'],
+        'max_seq_len': config['model']['max_seq_len'],
+        'learning_rate': config['training']['learning_rate'],
+        'top_k': config['k1_system']['credit_assignment']['top_k_agents'],
+        'phase_1_duration': 10000,  # Phase 2 activates at 10k iterations
+    }
     
-    k1_config['hierarchy_depth'] = config['k1_system']['hierarchy']['depth']
-    k1_config['branching_factor'] = config['k1_system']['hierarchy']['branching_factor']
-    
-    # Phase 2 starts at Epoch 20 (approx step 53,360)
-    phase1_steps = 53360
-    k1_config['phase1_steps'] = phase1_steps
-    k1_config['phase2_steps'] = config['training']['max_steps'] - phase1_steps
-    
-    k1_model = K1GPUModel(k1_config)
+    k1_model = create_k1_complete_model(k1_config)
     k1_stats = k1_model.get_stats()
-    print(f"K-1 GPU Model: {k1_stats['total_parameters']:,} parameters, {k1_stats['num_agents']} agents")
+    print(f"K-1 Complete Model: {k1_stats['total_parameters']:,} parameters, {k1_stats['total_agents']} agents")
+    print(f"  Trust System: {k1_stats['high_trust_agents']} high-trust agents cached")
+    print(f"  Sparse Updates: Top-{k1_config['top_k']} agents per step")
 
     # Baseline Model - MATCHED to K-1 dimensions for fair comparison
     # Same embed_dim (128) and similar hidden dims to K-1's architecture
