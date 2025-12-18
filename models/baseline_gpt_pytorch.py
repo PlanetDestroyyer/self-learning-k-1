@@ -273,7 +273,7 @@ class BaselineGPTPyTorch(nn.Module):
         self.eval()
         
         # Handle numpy input
-        if hasattr(prompt, 'numpy'):n
+        if hasattr(prompt, 'numpy'):
             prompt = prompt.cpu().numpy() if hasattr(prompt, 'cpu') else prompt
         if isinstance(prompt, (list, tuple)) or (hasattr(prompt, '__len__') and not isinstance(prompt, torch.Tensor)):
             import numpy as np

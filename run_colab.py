@@ -620,10 +620,10 @@ def main():
     # Baseline Model - Scaled to ~135M params to match K-1
     baseline_config = {
         'vocab_size': actual_vocab_size,
-        'embed_dim': 512,       # Scaled up from 128
-        'num_layers': 12,       # Scaled up from 3
-        'num_heads': 8,         # Scaled up from 4  
-        'ff_dim': 2048,         # Scaled up from 512
+        'embed_dim': 1024,      # Scaled up for ~135M params
+        'num_layers': 10,       # 10 layers
+        'num_heads': 16,        # 16 attention heads
+        'ff_dim': 4096,         # Large feedforward
         'max_seq_len': config['model']['max_seq_len'],
         'learning_rate': config['training']['learning_rate'],
         'dropout': 0.1,
