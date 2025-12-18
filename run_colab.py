@@ -617,13 +617,15 @@ def main():
     k1_stats = k1_model.get_stats()
     print(f"K-1 GPU Model: {k1_stats['total_parameters']:,} parameters, {k1_stats['num_agents']} agents")
 
-    # Baseline Model - Scaled to ~135M params to match K-1
+    # Baseline Model - MATCHED to K-1 dimensions for fair comparison
+    # Same embed_dim (128) and similar hidden dims to K-1's architecture
+    # This ensures both models have similar computational cost per step
     baseline_config = {
         'vocab_size': actual_vocab_size,
-        'embed_dim': 1024,      # Scaled up for ~135M params
-        'num_layers': 10,       # 10 layers
-        'num_heads': 16,        # 16 attention heads
-        'ff_dim': 4096,         # Large feedforward
+        'embed_dim': 128,       # MATCHED to K-1's embed_dim
+        'num_layers': 12,       # Moderate depth for comparison
+        'num_heads': 4,         # MATCHED to K-1's config
+        'ff_dim': 512,          # MATCHED to K-1's ff_dim  
         'max_seq_len': config['model']['max_seq_len'],
         'learning_rate': config['training']['learning_rate'],
         'dropout': 0.1,
