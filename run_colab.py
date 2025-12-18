@@ -21,7 +21,7 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 # Import our models
 # from models.k1_model import K1SelfLearningLM
-from models.baseline_gpt import BaselineGPT
+from models.baseline_gpt_pytorch import BaselineGPTPyTorch
 
 # =============================================================================
 # Data Loading
@@ -140,8 +140,9 @@ def prepare_data(text_data, config: Dict) -> Tuple[List, List, List, Dict, Dict]
     def create_dataloader(seq_data, shuffle=True):
         if not seq_data:
             return None
-        x_data = torch.tensor([s[0] for s in seq_data], dtype=torch.long)
-        y_data = torch.tensor([s[1] for s in seq_data], dtype=torch.long)
+        # Convert to numpy array first to avoid slow tensor creation warning
+        x_data = torch.tensor(np.array([s[0] for s in seq_data]), dtype=torch.long)
+        y_data = torch.tensor(np.array([s[1] for s in seq_data]), dtype=torch.long)
         dataset = TensorDataset(x_data, y_data)
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0) # num_workers=0 for Colab safety
 
@@ -243,11 +244,11 @@ def train_k1_model(model: K1GPUModel, train_loader: DataLoader, val_loader: Data
     return history
 
 
-def train_baseline_model(model: BaselineGPT, train_loader: DataLoader, val_loader: DataLoader,
+def train_baseline_model(model: BaselineGPTPyTorch, train_loader: DataLoader, val_loader: DataLoader,
                           config: Dict, verbose: bool = True) -> Dict:
-    """Train the baseline GPT model."""
+    """Train the baseline GPT model (PyTorch GPU version)."""
     print("\n" + "=" * 60)
-    print("Training Baseline GPT Model")
+    print("Training Baseline GPT Model (PyTorch)")
     print("=" * 60)
 
     max_steps = config['training']['max_steps']
@@ -262,14 +263,6 @@ def train_baseline_model(model: BaselineGPT, train_loader: DataLoader, val_loade
     start_time = time.time()
     best_val_loss = float('inf')
     
-    # Baseline uses numpy internally in its current state? 
-    # Wait, BaselineGPT was numpy based. We need to be careful.
-    # If BaselineGPT is numpy, we can't just pass tensors easily unless we convert.
-    # Or strict requirement: Baseline MUST be converted to PyTorch or we bridge.
-    # The previous code for BaselineGPT was numpy.
-    
-    # Bridge: Convert batch tensors to numpy for BaselineGPT
-    
     step = 0
     epoch = 0
     while step < max_steps:
@@ -278,40 +271,21 @@ def train_baseline_model(model: BaselineGPT, train_loader: DataLoader, val_loade
             step += 1
             if step > max_steps:
                 break
-                
-            # Convert to numpy for the legacy baseline
-            x_np = x_batch.numpy()
-            y_np = y_batch.numpy()
             
-            # BaselineGPT.train_step takes one sample? 
-            # In original code: `loss = model.train_step(x, y)` inside a loop.
-            # If BaselineGPT doesn't support batching, we have a problem.
-            # Checking BaselineGPT... it likely DOES NOT support batching if it was simple numpy.
-            # To handle this fairly, we should loop through the batch and accumulate gradients or just train 1-by-1
-            # OR we simply map 1 step = 1 batch for K1, but 1 step = 1 sample for Baseline? NO, that's unfair.
+            # Move to GPU and train (PyTorch handles batches properly)
+            x_b = x_batch.to(model.device)
+            y_b = y_batch.to(model.device)
             
-            # Since BaselineGPT is slow/legacy CPU, maybe we just mock it or assume user only cares about K-1 now?
-            # User said "run it for 50 epocs both baseline and self learning".
-            # Training a CPU numpy model for 50 epochs on WikiText will take YEARS.
-            # I must assume the user wants K-1 mainly.
-            # But let's try to feed the batch. If BaselineGPT fails, we just process first item.
-            
-            # Actually, `train_step` in baseline usually did forward/backward.
-            # Let's just train on the first sample of the batch to keep it "running" but not crash, 
-            # or try to run whole batch if code allows.
-            # Given I can't easily rewrite BaselineGPT to PyTorch right now without permission,
-            # I will just run it on the FIRST sample of the batch to mimic "Stochastic Gradient Descent".
-            # This is suboptimal but keeps the comparison pipeline alive.
-            
-            loss = model.train_step(x_np[0], y_np[0])
+            loss = model.train_step(x_b, y_b)
             history['train_loss'].append(loss)
             
             # Logging
             if step % log_every == 0 and verbose:
                 stats = model.get_stats()
                 elapsed = time.time() - start_time
-                print(f"Step {step:5d} | Loss: {loss:.4f} | "
+                print(f"Step {step:5d} (Ep {epoch}) | Loss: {loss:.4f} | "
                       f"Params: {stats['total_parameters']:,} | "
+                      f"Phase: {stats.get('device', 'GPU')} | "
                       f"Time: {elapsed:.1f}s")
             
             # Evaluation
@@ -352,26 +326,29 @@ def evaluate_model(model: K1GPUModel, dataloader: DataLoader, max_batches: int =
     return total_loss / count if count > 0 else 0.0
 
 
-def evaluate_baseline_model(model: BaselineGPT, dataloader: DataLoader, max_batches: int = 20) -> float:
-    """Evaluate baseline model on data."""
+def evaluate_baseline_model(model: BaselineGPTPyTorch, dataloader: DataLoader, max_batches: int = 20) -> float:
+    """Evaluate baseline model on data (PyTorch GPU version)."""
+    model.eval()
     total_loss = 0.0
     count = 0
     
-    # Baseline is still slow numpy, so we interpret the batches cautiously
-    for i, (x, y) in enumerate(dataloader):
-        if i >= max_batches:
-            break
-        
-        # Taking only the first item of the batch to simulate "stochastic" eval without resizing model
-        # Assuming baseline cannot handle batch inputs properly (it was designed for single seq)
-        x_np = x.numpy()[0]
-        y_np = y.numpy()[0]
-        
-        logits, _ = model.forward(x_np)
-        loss, _ = model.compute_loss(logits, y_np)
-        total_loss += loss
-        count += 1
-        
+    with torch.no_grad():
+        for i, (x, y) in enumerate(dataloader):
+            if i >= max_batches:
+                break
+            
+            x = x.to(model.device)
+            y = y.to(model.device)
+            
+            logits = model.forward(x)
+            loss = torch.nn.functional.cross_entropy(
+                logits.view(-1, model.vocab_size), 
+                y.view(-1)
+            )
+            total_loss += loss.item()
+            count += 1
+    
+    model.train()
     return total_loss / count if count > 0 else 0.0
 
 
@@ -396,7 +373,7 @@ class ComparisonResults:
     baseline_sample: str
 
 
-def compare_models(k1_model: K1GPUModel, baseline_model: BaselineGPT,
+def compare_models(k1_model: K1GPUModel, baseline_model: BaselineGPTPyTorch,
                    k1_history: Dict, baseline_history: Dict,
                    test_data: List, idx_to_char: Dict,
                    config: Dict) -> ComparisonResults:
@@ -640,19 +617,21 @@ def main():
     k1_stats = k1_model.get_stats()
     print(f"K-1 GPU Model: {k1_stats['total_parameters']:,} parameters, {k1_stats['num_agents']} agents")
 
-    # Baseline Model
+    # Baseline Model - Scaled to ~135M params to match K-1
     baseline_config = {
         'vocab_size': actual_vocab_size,
-        'embed_dim': config['model']['embed_dim'],
-        'num_layers': config['k1_system']['hierarchy']['depth'],  # Match depth
-        'num_heads': config['model']['num_heads'],
-        'ff_dim': config['model']['ff_dim'],
+        'embed_dim': 512,       # Scaled up from 128
+        'num_layers': 12,       # Scaled up from 3
+        'num_heads': 8,         # Scaled up from 4  
+        'ff_dim': 2048,         # Scaled up from 512
         'max_seq_len': config['model']['max_seq_len'],
-        'learning_rate': config['training']['learning_rate']
+        'learning_rate': config['training']['learning_rate'],
+        'dropout': 0.1,
+        'warmup_steps': 1000
     }
-    baseline_model = BaselineGPT(baseline_config)
+    baseline_model = BaselineGPTPyTorch(baseline_config)
     baseline_stats = baseline_model.get_stats()
-    print(f"Baseline Model: {baseline_stats['total_parameters']:,} parameters")
+    print(f"Baseline Model (PyTorch): {baseline_stats['total_parameters']:,} parameters")
 
     # Train both models
     print("\n" + "-" * 40)
