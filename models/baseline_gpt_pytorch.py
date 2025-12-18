@@ -177,7 +177,7 @@ class BaselineGPTPyTorch(nn.Module):
             
     def _register_causal_mask(self):
         """Register causal attention mask as buffer."""
-        mask = torch.tril(torch.ones(self.max_seq_len, self.max_seq_len))
+        mask = torch.tril(torch.ones(self.max_seq_len, self.max_seq_len, device=self.device))
         self.register_buffer('causal_mask', mask.view(1, 1, self.max_seq_len, self.max_seq_len))
         
     def _get_lr(self) -> float:
