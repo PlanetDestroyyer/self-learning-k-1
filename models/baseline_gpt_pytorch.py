@@ -153,12 +153,8 @@ class BaselineGPTPyTorch(nn.Module):
         self._register_causal_mask()
         
         # Compile model for faster execution (PyTorch 2.0+)
-        try:
-            # torch.compile can provide 2-3x speedup
-            import torch._dynamo
-            self._compiled = True
-        except ImportError:
-            self._compiled = False
+        # Note: torch.compile is optional and will be used automatically if available
+        self._compiled = False
         
         # Optimizer (Adam with weight decay)
         self.optimizer = torch.optim.AdamW(
