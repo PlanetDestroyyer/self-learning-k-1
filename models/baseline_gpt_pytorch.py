@@ -144,6 +144,9 @@ class BaselineGPTPyTorch(nn.Module):
         # Move to device
         self.to(self.device)
         
+        # Register causal mask buffer (after moving to device)
+        self._register_causal_mask()
+        
         # Optimizer (Adam with weight decay)
         self.optimizer = torch.optim.AdamW(
             self.parameters(),
@@ -155,9 +158,6 @@ class BaselineGPTPyTorch(nn.Module):
         # Learning rate scheduler with warmup
         self.warmup_steps = config.get('warmup_steps', 1000)
         self.step_count = 0
-        
-        # Register causal mask buffer
-        self._register_causal_mask()
         
         # Training state
         self.total_loss = 0.0
