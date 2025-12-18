@@ -71,7 +71,7 @@ class Agent(nn.Module):
         
         # Hierarchy
         self.parent = None
-        self.children = []
+        self.child_agents = []  # Renamed from 'children' to avoid PyTorch conflict
         
         # Metadata
         self.creation_iteration = 0
@@ -181,13 +181,13 @@ class Agent(nn.Module):
     
     def add_child(self, child):
         """Add child agent."""
-        self.children.append(child)
+        self.child_agents.append(child)
         child.parent = self
     
     def remove_child(self, child):
         """Remove child agent."""
-        if child in self.children:
-            self.children.remove(child)
+        if child in self.child_agents:
+            self.child_agents.remove(child)
             child.parent = None
 
 
@@ -211,7 +211,7 @@ class Hierarchy(nn.Module):
     def _register_agent_recursive(self, agent: Agent):
         """Recursively register all agents."""
         self.all_agents[agent.id] = agent
-        for child in agent.children:
+        for child in agent.child_agents:
             self._register_agent_recursive(child)
     
     def forward(self, x: torch.Tensor, max_depth: int = 3, 
@@ -246,14 +246,14 @@ class Hierarchy(nn.Module):
             current_hidden = current_hidden + agent_output
             
             # Route to children if not at max depth
-            if depth < max_depth and len(current_agent.children) > 0:
+            if depth < max_depth and len(current_agent.child_agents) > 0:
                 if routing_mode == 'soft':
                     # Soft routing: weighted combination of children
                     routing_weights = F.softmax(routing_logits, dim=1)
                     
                     # Get outputs from all children
                     child_outputs = []
-                    for child in current_agent.children:
+                    for child in current_agent.child_agents:
                         child_out, _ = child.forward(current_hidden, return_routing=True)
                         child_outputs.append(child_out)
                         active_agents.append(child)
@@ -267,16 +267,16 @@ class Hierarchy(nn.Module):
                     
                     # For next iteration, pick best child
                     best_child_idx = routing_weights.argmax(dim=1)[0].item()
-                    if best_child_idx < len(current_agent.children):
-                        current_agent = current_agent.children[best_child_idx]
+                    if best_child_idx < len(current_agent.child_agents):
+                        current_agent = current_agent.child_agents[best_child_idx]
                     else:
                         break
                         
                 else:  # hard routing
                     # Hard routing: pick best child
                     best_child_idx = routing_logits.argmax(dim=1)[0].item()
-                    if best_child_idx < len(current_agent.children):
-                        current_agent = current_agent.children[best_child_idx]
+                    if best_child_idx < len(current_agent.child_agents):
+                        current_agent = current_agent.child_agents[best_child_idx]
                         active_agents.append(current_agent)
                     else:
                         break

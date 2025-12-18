@@ -320,7 +320,7 @@ def train_baseline_model(model: BaselineGPTPyTorch, train_loader: DataLoader, va
     return history
 
 
-def evaluate_model(model: K1GPUModel, dataloader: DataLoader, max_batches: int = 20) -> float:
+def evaluate_model(model, dataloader: DataLoader, max_batches: int = 20) -> float:
     """Evaluate K-1 model on data."""
     model.eval()
     total_loss = 0.0
