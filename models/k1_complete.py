@@ -1,158 +1,174 @@
 """
-K-1 Self-Learning System - SPARSE INTERPRETABLE UPDATES
-Find which agent caused the error → Update ONLY that agent
+K-1 Self-Learning System - CORRECT IMPLEMENTATION
+Same architecture as baseline GPT (attention, FFN, everything)
+But: Selective layer updates instead of full backprop
 
-This is NOT standard backprop (update all).
-This is NOT arbitrary top-K selection.
-This is: Find responsible agent → Update it.
+Architecture: SAME as baseline (transformer blocks with attention)
+Training: Find responsible layers → Update only those (not all)
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
-class Agent(nn.Module):
-    """Agent with tracking for error attribution."""
+class MultiHeadAttention(nn.Module):
+    """Same as baseline - Multi-head self-attention with causal masking."""
     
-    def __init__(self, agent_id: str, domain: str, specialty: str,
-                 input_dim: int, hidden_dim: int, output_dim: int,
-                 device='cuda'):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1):
         super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scale = math.sqrt(self.head_dim)
         
-        self.id = agent_id
-        self.domain = domain
-        self.specialty = specialty
-        self.device = device
-        
-        # Network
-        self.ln1 = nn.LayerNorm(input_dim)
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.ln2 = nn.LayerNorm(hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
-        
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        
-        # Error tracking - which errors does this agent handle?
-        self.error_responsibility = 0.0  # Current step's responsibility
-        self.total_updates = 0
-        self.total_errors_handled = 0.0
-        
-        self.to(device)
+        self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        self.dropout = nn.Dropout(dropout)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_norm = self.ln1(x)
-        hidden = F.gelu(self.fc1(x_norm))
-        hidden_norm = self.ln2(hidden)
-        output = self.fc2(hidden_norm)
+        B, T, C = x.shape
         
-        if self.input_dim == self.output_dim:
-            output = output + x
-        return output
+        qkv = self.qkv_proj(x)
+        qkv = qkv.reshape(B, T, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        try:
+            out = F.scaled_dot_product_attention(
+                q, k, v, dropout_p=self.dropout.p if self.training else 0.0, is_causal=True
+            )
+        except:
+            attn = (q @ k.transpose(-2, -1)) / self.scale
+            mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
+            attn = attn.masked_fill(mask, float('-inf'))
+            attn = F.softmax(attn, dim=-1)
+            attn = self.dropout(attn)
+            out = attn @ v
+        
+        out = out.transpose(1, 2).reshape(B, T, C)
+        return self.out_proj(out)
+
+
+class FeedForward(nn.Module):
+    """Same as baseline - FFN with GELU."""
+    
+    def __init__(self, embed_dim: int, ff_dim: int, dropout: float = 0.1):
+        super().__init__()
+        self.fc1 = nn.Linear(embed_dim, ff_dim)
+        self.fc2 = nn.Linear(ff_dim, embed_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc2(self.dropout(F.gelu(self.fc1(x))))
+
+
+class TransformerBlock(nn.Module):
+    """Same as baseline - Transformer block with pre-norm."""
+    
+    def __init__(self, block_id: int, embed_dim: int, num_heads: int, ff_dim: int, dropout: float = 0.1):
+        super().__init__()
+        self.block_id = block_id  # For tracking which block is responsible
+        
+        self.ln1 = nn.LayerNorm(embed_dim)
+        self.attn = MultiHeadAttention(embed_dim, num_heads, dropout)
+        self.ln2 = nn.LayerNorm(embed_dim)
+        self.ff = FeedForward(embed_dim, ff_dim, dropout)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Tracking for selective updates
+        self.gradient_magnitude = 0.0
+        self.times_updated = 0
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.dropout(self.attn(self.ln1(x)))
+        x = x + self.dropout(self.ff(self.ln2(x)))
+        return x
 
 
 class K1CompleteSystem(nn.Module):
     """
-    K-1 System - Sparse Interpretable Updates
+    K-1 with CORRECT architecture (same as baseline GPT).
     
-    Key Idea:
-    1. All agents contribute to forward pass
-    2. On error, find which agent CAUSED it (gradient attribution)
-    3. Update ONLY that agent (not all like backprop)
-    4. Track which agent learns what (interpretability)
+    Architecture: Standard transformer (attention + FFN)
+    Training: Selective layer updates (not full backprop)
+    
+    This answers: "Which transformer block is responsible for this error?"
     """
     
     def __init__(self, config: Dict):
         super().__init__()
         
-        self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Dimensions
+        # Same dimensions as baseline
         self.vocab_size = config.get('vocab_size', 1000)
         self.embed_dim = config.get('embed_dim', 128)
-        self.hidden_dim = config.get('hidden_dim', 256)
+        self.num_layers = config.get('num_layers', 4)
+        self.num_heads = config.get('num_heads', 4)
+        self.ff_dim = config.get('ff_dim', 512)
         self.max_seq_len = config.get('max_seq_len', 64)
+        self.dropout = config.get('dropout', 0.1)
         
-        # Core layers (these ALWAYS update - they're shared infrastructure)
-        self.embedding = nn.Embedding(self.vocab_size, self.embed_dim)
-        self.output_proj = nn.Linear(self.embed_dim, self.vocab_size)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Build agent hierarchy
-        self.agents = nn.ModuleList()
-        self._build_hierarchy()
+        # Same architecture as baseline
+        self.token_embedding = nn.Embedding(self.vocab_size, self.embed_dim)
+        self.pos_embedding = nn.Embedding(self.max_seq_len, self.embed_dim)
+        self.embed_dropout = nn.Dropout(self.dropout)
         
-        # Training params
+        # Transformer blocks (these are our "agents")
+        self.blocks = nn.ModuleList([
+            TransformerBlock(i, self.embed_dim, self.num_heads, self.ff_dim, self.dropout)
+            for i in range(self.num_layers)
+        ])
+        
+        self.ln_final = nn.LayerNorm(self.embed_dim)
+        self.output_proj = nn.Linear(self.embed_dim, self.vocab_size, bias=False)
+        
+        # Weight tying
+        self.output_proj.weight = self.token_embedding.weight
+        
+        # Training
         self.learning_rate = config.get('learning_rate', 1e-4)
-        
-        # How many agents to update per step (the ones most responsible for error)
-        # Adaptive selection: agents above mean gradient get updated
-        
-        # Phase tracking
         self.current_iteration = 0
         self.phase_1_duration = config.get('phase_1_duration', 10000)
         self.phase_2_active = False
         
         self.to(self.device)
         
-    def _build_hierarchy(self):
-        """Build: Root → Managers → Specialists"""
-        # Root agent
-        root = Agent('root', 'Master', 'Root', 
-                     self.embed_dim, self.hidden_dim, self.embed_dim, self.device)
-        self.agents.append(root)
-        
-        # 4 Domain managers
-        domains = ['Language', 'Logic', 'Pattern', 'Context']
-        for domain in domains:
-            manager = Agent(f'mgr_{domain}', domain, 'Manager',
-                           self.embed_dim, self.hidden_dim, self.embed_dim, self.device)
-            self.agents.append(manager)
-            
-            # 4 Specialists per manager
-            subtopics = ['Basic', 'Advanced', 'Edge', 'Complex']
-            for subtopic in subtopics:
-                spec = Agent(f'spec_{domain}_{subtopic}', domain, subtopic,
-                            self.embed_dim, self.hidden_dim, self.embed_dim, self.device)
-                self.agents.append(spec)
-        
-        print(f"Built {len(self.agents)} agents: 1 root + 4 managers + 16 specialists")
+        # Count parameters
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f"Built K-1 with {self.num_layers} transformer blocks, {total_params:,} parameters")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass - all agents contribute."""
+        """Same forward pass as baseline GPT."""
         B, T = x.shape
-        hidden = self.embedding(x)
-        flat = hidden.reshape(B * T, self.embed_dim)
         
-        # Each agent contributes equally
-        agent_contributions = []
-        for agent in self.agents:
-            out = agent.forward(flat)
-            agent_contributions.append(out)
+        # Token + position embeddings
+        tok_emb = self.token_embedding(x)
+        pos = torch.arange(T, device=x.device).unsqueeze(0)
+        pos_emb = self.pos_embedding(pos)
+        x = self.embed_dropout(tok_emb + pos_emb)
         
-        # Average all contributions
-        combined = sum(agent_contributions) / len(self.agents)
-        flat = flat + combined
+        # Through transformer blocks
+        for block in self.blocks:
+            x = block(x)
         
-        hidden = flat.reshape(B, T, self.embed_dim)
-        logits = self.output_proj(hidden)
+        x = self.ln_final(x)
+        logits = self.output_proj(x)
         
         return logits
     
-    def find_responsible_agents(self) -> List[tuple]:
-        """
-        Find which agents are responsible for the current error.
-        ADAPTIVE: Update agents with gradient above mean (not fixed top-K).
-        """
+    def find_responsible_blocks(self) -> List[tuple]:
+        """Find which transformer blocks have the highest gradients."""
         responsibilities = []
         
-        for agent in self.agents:
+        for block in self.blocks:
             grad_sum = 0.0
             param_count = 0
-            for param in agent.parameters():
+            for param in block.parameters():
                 if param.grad is not None:
                     grad_sum += param.grad.abs().sum().item()
                     param_count += param.numel()
@@ -162,27 +178,24 @@ class K1CompleteSystem(nn.Module):
             else:
                 responsibility = 0.0
             
-            agent.error_responsibility = responsibility
-            responsibilities.append((agent, responsibility))
+            block.gradient_magnitude = responsibility
+            responsibilities.append((block, responsibility))
         
-        # ADAPTIVE SELECTION: Update agents above mean responsibility
-        mean_resp = np.mean([r for _, r in responsibilities])
-        
-        # Select agents above mean (they're more responsible than average)
-        responsible = [(a, r) for a, r in responsibilities if r > mean_resp]
-        
-        # Sort by responsibility (highest first)
+        # Return blocks with above-average gradient
+        mean_resp = np.mean([r for _, r in responsibilities]) if responsibilities else 0
+        responsible = [(b, r) for b, r in responsibilities if r > mean_resp]
         responsible.sort(key=lambda x: x[1], reverse=True)
         
         return responsible
     
     def train_step(self, x: torch.Tensor, y: torch.Tensor) -> Dict:
         """
-        Sparse interpretable training:
-        1. Forward pass
-        2. Compute loss and gradients
-        3. Find which agents caused the error
-        4. Update ONLY those agents (not all!)
+        Selective layer update training.
+        
+        1. Forward pass (same as baseline)
+        2. Compute loss and gradients (same as baseline)
+        3. Find which blocks are responsible (NEW!)
+        4. Update ONLY those blocks + embeddings (different from baseline)
         """
         self.current_iteration += 1
         
@@ -195,58 +208,58 @@ class K1CompleteSystem(nn.Module):
         x = x.to(self.device)
         y = y.to(self.device)
         
-        # Forward + loss
+        # Forward pass (same as baseline)
         logits = self.forward(x)
         loss = F.cross_entropy(logits.reshape(-1, self.vocab_size), y.reshape(-1))
         loss_val = loss.item()
         
-        # Backprop to get gradients (but don't apply yet!)
+        # Compute gradients (same as baseline)
         loss.backward()
         
-        # ALWAYS update embedding and output_proj (shared infrastructure)
+        # ALWAYS update embeddings and output (shared infrastructure)
         with torch.no_grad():
-            for param in self.embedding.parameters():
+            for param in self.token_embedding.parameters():
                 if param.grad is not None:
                     param.data -= self.learning_rate * param.grad
-            for param in self.output_proj.parameters():
+            for param in self.pos_embedding.parameters():
                 if param.grad is not None:
                     param.data -= self.learning_rate * param.grad
+            for param in self.ln_final.parameters():
+                if param.grad is not None:
+                    param.data -= self.learning_rate * param.grad
+            # Note: output_proj shares weights with token_embedding
         
-        # Find which agents are responsible (ADAPTIVE - above mean gradient)
-        responsible_agents = self.find_responsible_agents()
+        # Find which blocks are responsible (NEW!)
+        responsible_blocks = self.find_responsible_blocks()
         
+        # Update ONLY responsible blocks (not all like baseline!)
         updated = 0
         with torch.no_grad():
-            for agent, resp in responsible_agents:
-                for param in agent.parameters():
+            for block, resp in responsible_blocks:
+                for param in block.parameters():
                     if param.grad is not None:
                         param.data -= self.learning_rate * param.grad
-                agent.total_updates += 1
-                agent.total_errors_handled += resp
+                block.times_updated += 1
                 updated += 1
         
-        # Zero all gradients
+        # Zero gradients
         self.zero_grad()
-        
-        # Get names of updated agents for display
-        updated_names = [a.id for a, _ in responsible_agents]
         
         return {
             'loss': loss_val,
             'updated': updated,
-            'skipped': len(self.agents) - updated,
-            'total_agents': len(self.agents),
-            'avg_trust': 0.5,  # Placeholder for compatibility
+            'skipped': len(self.blocks) - updated,
+            'total_agents': len(self.blocks),
+            'avg_trust': 0.5,
             'high_trust': 0,
             'loo_computed': False,
-            'phase': 'Phase 2' if self.phase_2_active else 'Phase 1',
-            'responsible_agents': updated_names  # NEW: which agents learned
+            'phase': 'Phase 2' if self.phase_2_active else 'Phase 1'
         }
     
     def get_stats(self) -> Dict:
         return {
             'total_parameters': sum(p.numel() for p in self.parameters()),
-            'total_agents': len(self.agents),
+            'total_agents': len(self.blocks),
             'avg_trust': 0.5,
             'high_trust_agents': 0,
             'phase': 'Phase 2' if self.phase_2_active else 'Phase 1',
@@ -254,18 +267,16 @@ class K1CompleteSystem(nn.Module):
         }
     
     def get_agent_status(self) -> List[Dict]:
-        """See which agents have learned the most."""
-        return sorted([{
-            'id': a.id,
-            'domain': a.domain,
-            'specialty': a.specialty,
+        return [{
+            'id': f'block_{b.block_id}',
+            'domain': 'Transformer',
+            'specialty': f'Layer {b.block_id}',
             'trust': 0.5,
-            'updated': a.total_updates,
-            'skipped': self.current_iteration - a.total_updates,
+            'updated': b.times_updated,
+            'skipped': self.current_iteration - b.times_updated,
             'loo_score': 0,
-            'grad_score': round(a.error_responsibility, 6),
-            'errors_handled': round(a.total_errors_handled, 4)
-        } for a in self.agents], key=lambda x: x['updated'], reverse=True)
+            'grad_score': round(b.gradient_magnitude, 6)
+        } for b in self.blocks]
     
     def generate(self, prompt: torch.Tensor, max_new_tokens: int = 50,
                 temperature: float = 1.0) -> List[int]:
