@@ -1,12 +1,10 @@
 """
-K-1 Self-Learning System - COMPLETE IMPLEMENTATION
-Trust-based hierarchical learning with hybrid LOO attribution
+K-1 Self-Learning System - SPARSE INTERPRETABLE UPDATES
+Find which agent caused the error → Update ONLY that agent
 
-Features:
-- Trust = "already learned, skip updates" cooldown mechanism
-- Hierarchy = error type matching (managers=domains, specialists=subtopics)
-- Hybrid attribution: gradient-based (fast) + LOO verification (accurate)
-- Trust decay: good agents stay high, bad agents fade to 0
+This is NOT standard backprop (update all).
+This is NOT arbitrary top-K selection.
+This is: Find responsible agent → Update it.
 """
 
 import torch
@@ -14,11 +12,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from typing import Dict, List
-import time
 
 
 class Agent(nn.Module):
-    """Agent with trust-based cooldown and LOO attribution."""
+    """Agent with tracking for error attribution."""
     
     def __init__(self, agent_id: str, domain: str, specialty: str,
                  input_dim: int, hidden_dim: int, output_dim: int,
@@ -39,15 +36,10 @@ class Agent(nn.Module):
         self.input_dim = input_dim
         self.output_dim = output_dim
         
-        # Trust system
-        self.trust = 0.0
-        self.times_updated = 0
-        self.times_skipped = 0
-        
-        # LOO attribution
-        self.loo_contribution = 0.0  # Last computed LOO score
-        self.loo_step = 0  # When LOO was last computed
-        self.gradient_contribution = 0.0  # Fast gradient-based estimate
+        # Error tracking - which errors does this agent handle?
+        self.error_responsibility = 0.0  # Current step's responsibility
+        self.total_updates = 0
+        self.total_errors_handled = 0.0
         
         self.to(device)
         
@@ -60,24 +52,17 @@ class Agent(nn.Module):
         if self.input_dim == self.output_dim:
             output = output + x
         return output
-    
-    def decay_trust(self, decay_factor: float = 0.995):
-        self.trust *= decay_factor
 
 
 class K1CompleteSystem(nn.Module):
     """
-    K-1 System with hybrid LOO attribution.
+    K-1 System - Sparse Interpretable Updates
     
-    Credit Assignment:
-    - Fast: Gradient magnitude (every step)
-    - Accurate: Leave-One-Out (every N steps)
-    
-    Trust System:
-    - Low trust → update (needs learning)
-    - High trust → skip (already learned)
-    - After update → trust increases
-    - Slow decay → allows re-learning
+    Key Idea:
+    1. All agents contribute to forward pass
+    2. On error, find which agent CAUSED it (gradient attribution)
+    3. Update ONLY that agent (not all like backprop)
+    4. Track which agent learns what (interpretability)
     """
     
     def __init__(self, config: Dict):
@@ -92,25 +77,19 @@ class K1CompleteSystem(nn.Module):
         self.hidden_dim = config.get('hidden_dim', 256)
         self.max_seq_len = config.get('max_seq_len', 64)
         
-        # Core layers
+        # Core layers (these ALWAYS update - they're shared infrastructure)
         self.embedding = nn.Embedding(self.vocab_size, self.embed_dim)
         self.output_proj = nn.Linear(self.embed_dim, self.vocab_size)
         
-        # Build hierarchy
+        # Build agent hierarchy
         self.agents = nn.ModuleList()
-        self.managers = []
-        self.specialists = {}
         self._build_hierarchy()
         
         # Training params
         self.learning_rate = config.get('learning_rate', 1e-4)
-        self.top_k = config.get('top_k', 5)
-        self.trust_threshold = config.get('trust_threshold', 0.95)  # HIGHER so agents learn more
-        self.trust_increase = config.get('trust_increase', 0.03)    # SLOWER trust buildup
-        self.trust_decay = config.get('trust_decay', 0.998)         # SLOWER decay
         
-        # LOO attribution settings
-        self.loo_interval = config.get('loo_interval', 50)  # Compute LOO every N steps
+        # How many agents to update per step (the ones most responsible for error)
+        self.num_responsible = config.get('num_responsible', 3)
         
         # Phase tracking
         self.current_iteration = 0
@@ -120,86 +99,93 @@ class K1CompleteSystem(nn.Module):
         self.to(self.device)
         
     def _build_hierarchy(self):
-        """Build: Root → Managers (domains) → Specialists (subtopics)"""
+        """Build: Root → Managers → Specialists"""
+        # Root agent
         root = Agent('root', 'Master', 'Root', 
                      self.embed_dim, self.hidden_dim, self.embed_dim, self.device)
         self.agents.append(root)
         
+        # 4 Domain managers
         domains = ['Language', 'Logic', 'Pattern', 'Context']
-        for i, domain in enumerate(domains):
+        for domain in domains:
             manager = Agent(f'mgr_{domain}', domain, 'Manager',
                            self.embed_dim, self.hidden_dim, self.embed_dim, self.device)
             self.agents.append(manager)
-            self.managers.append(manager)
-            self.specialists[domain] = []
             
+            # 4 Specialists per manager
             subtopics = ['Basic', 'Advanced', 'Edge', 'Complex']
-            for j, subtopic in enumerate(subtopics):
+            for subtopic in subtopics:
                 spec = Agent(f'spec_{domain}_{subtopic}', domain, subtopic,
                             self.embed_dim, self.hidden_dim, self.embed_dim, self.device)
                 self.agents.append(spec)
-                self.specialists[domain].append(spec)
         
-        print(f"Built hierarchy: 1 root + {len(self.managers)} managers + "
-              f"{sum(len(v) for v in self.specialists.values())} specialists = {len(self.agents)} agents")
+        print(f"Built {len(self.agents)} agents: 1 root + 4 managers + 16 specialists")
     
-    def forward(self, x: torch.Tensor, exclude_agent: Agent = None) -> torch.Tensor:
-        """Forward pass. If exclude_agent is set, skip that agent (for LOO)."""
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass - all agents contribute."""
         B, T = x.shape
         hidden = self.embedding(x)
         flat = hidden.reshape(B * T, self.embed_dim)
         
-        # Normalized trust-weighted contributions
-        active_agents = [a for a in self.agents if a != exclude_agent]
-        total_weight = sum(0.1 + a.trust for a in active_agents)
+        # Each agent contributes equally
+        agent_contributions = []
+        for agent in self.agents:
+            out = agent.forward(flat)
+            agent_contributions.append(out)
         
-        agent_sum = torch.zeros_like(flat)
-        for agent in active_agents:
-            agent_out = agent.forward(flat)
-            weight = (0.1 + agent.trust) / total_weight
-            agent_sum = agent_sum + agent_out * weight
+        # Average all contributions
+        combined = sum(agent_contributions) / len(self.agents)
+        flat = flat + combined
         
-        flat = flat + agent_sum * 0.1
         hidden = flat.reshape(B, T, self.embed_dim)
         logits = self.output_proj(hidden)
         
         return logits
     
-    def compute_loo_contributions(self, x: torch.Tensor, y: torch.Tensor, 
-                                   base_loss: float) -> Dict[str, float]:
+    def find_responsible_agents(self) -> List[tuple]:
         """
-        Compute Leave-One-Out contribution for each agent.
-        Positive = agent made loss WORSE (blame it)
-        Negative = agent made loss BETTER (credit it)
+        Find which agents are MOST responsible for the current error.
+        Uses gradient magnitude as proxy for responsibility.
+        Higher gradient = agent contributed more to error = needs update.
         """
-        contributions = {}
+        responsibilities = []
         
-        with torch.no_grad():
-            for agent in self.agents:
-                # Forward without this agent
-                logits_without = self.forward(x, exclude_agent=agent)
-                loss_without = F.cross_entropy(
-                    logits_without.reshape(-1, self.vocab_size), 
-                    y.reshape(-1)
-                ).item()
-                
-                # Contribution = how much loss INCREASES when we REMOVE agent
-                # Positive = agent was HELPING (removing it makes loss worse)
-                # Negative = agent was HURTING (removing it makes loss better)
-                contribution = loss_without - base_loss
-                contributions[agent.id] = contribution
-                agent.loo_contribution = contribution
-                agent.loo_step = self.current_iteration
+        for agent in self.agents:
+            # Sum of absolute gradients = how much this agent affects the loss
+            grad_sum = 0.0
+            param_count = 0
+            for param in agent.parameters():
+                if param.grad is not None:
+                    grad_sum += param.grad.abs().sum().item()
+                    param_count += param.numel()
+            
+            # Normalize by parameter count
+            if param_count > 0:
+                responsibility = grad_sum / param_count
+            else:
+                responsibility = 0.0
+            
+            agent.error_responsibility = responsibility
+            responsibilities.append((agent, responsibility))
         
-        return contributions
+        # Sort by responsibility (highest first)
+        responsibilities.sort(key=lambda x: x[1], reverse=True)
+        
+        return responsibilities
     
     def train_step(self, x: torch.Tensor, y: torch.Tensor) -> Dict:
-        """Training with hybrid LOO attribution."""
+        """
+        Sparse interpretable training:
+        1. Forward pass
+        2. Compute loss and gradients
+        3. Find which agents caused the error
+        4. Update ONLY those agents (not all!)
+        """
         self.current_iteration += 1
         
         if self.current_iteration == self.phase_1_duration:
             print("\n" + "="*70)
-            print("🚀 PHASE 2 ACTIVATED: Self-Learning Mode Enabled")
+            print("🚀 PHASE 2 ACTIVATED")
             print("="*70 + "\n")
             self.phase_2_active = True
         
@@ -211,10 +197,10 @@ class K1CompleteSystem(nn.Module):
         loss = F.cross_entropy(logits.reshape(-1, self.vocab_size), y.reshape(-1))
         loss_val = loss.item()
         
-        # Backprop for gradients
+        # Backprop to get gradients (but don't apply yet!)
         loss.backward()
         
-        # Update embedding and output layers
+        # ALWAYS update embedding and output_proj (shared infrastructure)
         with torch.no_grad():
             for param in self.embedding.parameters():
                 if param.grad is not None:
@@ -223,95 +209,63 @@ class K1CompleteSystem(nn.Module):
                 if param.grad is not None:
                     param.data -= self.learning_rate * param.grad
         
-        # === HYBRID ATTRIBUTION ===
-        # Fast: Gradient-based (every step)
-        for agent in self.agents:
-            agent.gradient_contribution = sum(
-                p.grad.abs().mean().item() for p in agent.parameters() if p.grad is not None
-            )
+        # Find which agents are responsible for this error
+        responsibilities = self.find_responsible_agents()
         
-        # Accurate: LOO verification (every N steps)
-        loo_computed = False
-        if self.current_iteration % self.loo_interval == 0:
-            loo_contributions = self.compute_loo_contributions(x, y, loss_val)
-            loo_computed = True
+        # Update ONLY the most responsible agents
+        responsible_agents = responsibilities[:self.num_responsible]
         
-        # Rank agents by combined score
-        agent_scores = []
-        for agent in self.agents:
-            # Use gradient contribution, weighted by recent LOO if available
-            score = agent.gradient_contribution
-            if agent.loo_step > 0:
-                # Positive LOO = agent was helping, negative = hurting
-                # We want to UPDATE agents that are HURTING (negative LOO)
-                loo_factor = 1.0 - agent.loo_contribution  # Invert: hurting agents get higher score
-                score *= loo_factor
-            agent_scores.append((agent, score))
-        
-        agent_scores.sort(key=lambda x: x[1], reverse=True)
-        
-        # Select top-K, but SKIP high-trust agents
-        candidates = []
-        skipped = 0
-        for agent, score in agent_scores:
-            if agent.trust < self.trust_threshold:
-                candidates.append((agent, score))
-            else:
-                agent.times_skipped += 1
-                skipped += 1
-            if len(candidates) >= self.top_k:
-                break
-        
-        # Update selected agents
         updated = 0
         with torch.no_grad():
-            for agent, _ in candidates:
+            for agent, resp in responsible_agents:
                 for param in agent.parameters():
                     if param.grad is not None:
                         param.data -= self.learning_rate * param.grad
-                agent.trust = min(1.0, agent.trust + self.trust_increase)
-                agent.times_updated += 1
+                agent.total_updates += 1
+                agent.total_errors_handled += resp
                 updated += 1
         
-        # Zero gradients
+        # Zero all gradients
         self.zero_grad()
         
-        # Decay trust
-        for agent in self.agents:
-            agent.decay_trust(self.trust_decay)
+        # Get names of updated agents for display
+        updated_names = [a.id for a, _ in responsible_agents]
         
         return {
             'loss': loss_val,
             'updated': updated,
-            'skipped': skipped,
+            'skipped': len(self.agents) - updated,
             'total_agents': len(self.agents),
-            'avg_trust': np.mean([a.trust for a in self.agents]),
-            'high_trust': sum(1 for a in self.agents if a.trust > self.trust_threshold),
-            'loo_computed': loo_computed,
-            'phase': 'Phase 2' if self.phase_2_active else 'Phase 1'
+            'avg_trust': 0.5,  # Placeholder for compatibility
+            'high_trust': 0,
+            'loo_computed': False,
+            'phase': 'Phase 2' if self.phase_2_active else 'Phase 1',
+            'responsible_agents': updated_names  # NEW: which agents learned
         }
     
     def get_stats(self) -> Dict:
         return {
             'total_parameters': sum(p.numel() for p in self.parameters()),
             'total_agents': len(self.agents),
-            'avg_trust': np.mean([a.trust for a in self.agents]),
-            'high_trust_agents': sum(1 for a in self.agents if a.trust > self.trust_threshold),
+            'avg_trust': 0.5,
+            'high_trust_agents': 0,
             'phase': 'Phase 2' if self.phase_2_active else 'Phase 1',
             'iteration': self.current_iteration
         }
     
     def get_agent_status(self) -> List[Dict]:
-        return [{
+        """See which agents have learned the most."""
+        return sorted([{
             'id': a.id,
             'domain': a.domain,
             'specialty': a.specialty,
-            'trust': round(a.trust, 3),
-            'updated': a.times_updated,
-            'skipped': a.times_skipped,
-            'loo_score': round(a.loo_contribution, 4),
-            'grad_score': round(a.gradient_contribution, 4)
-        } for a in self.agents]
+            'trust': 0.5,
+            'updated': a.total_updates,
+            'skipped': self.current_iteration - a.total_updates,
+            'loo_score': 0,
+            'grad_score': round(a.error_responsibility, 6),
+            'errors_handled': round(a.total_errors_handled, 4)
+        } for a in self.agents], key=lambda x: x['updated'], reverse=True)
     
     def generate(self, prompt: torch.Tensor, max_new_tokens: int = 50,
                 temperature: float = 1.0) -> List[int]:
