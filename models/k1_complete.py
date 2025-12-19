@@ -130,17 +130,46 @@ class K1CompleteSystem(nn.Module):
         # Weight tying
         self.output_proj.weight = self.token_embedding.weight
         
-        # Training
+        # SAME initialization as baseline!
+        self.apply(self._init_weights)
+        
+        # Training (same as baseline: AdamW with warmup)
         self.learning_rate = config.get('learning_rate', 1e-4)
         self.current_iteration = 0
         self.phase_1_duration = config.get('phase_1_duration', 10000)
         self.phase_2_active = False
+        self.warmup_steps = config.get('warmup_steps', 1000)
+        
+        # AdamW optimizer (same as baseline!)
+        self.optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.learning_rate,
+            weight_decay=0.01,
+            betas=(0.9, 0.999)
+        )
         
         self.to(self.device)
         
-        # Count parameters
         total_params = sum(p.numel() for p in self.parameters())
         print(f"Built K-1 with {self.num_layers} transformer blocks, {total_params:,} parameters")
+    
+    def _init_weights(self, module):
+        """SAME weight initialization as baseline."""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.ones_(module.weight)
+            torch.nn.init.zeros_(module.bias)
+    
+    def _get_lr(self) -> float:
+        """Learning rate with warmup (same as baseline)."""
+        if self.current_iteration < self.warmup_steps:
+            return self.learning_rate * (self.current_iteration + 1) / self.warmup_steps
+        return self.learning_rate
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Same forward pass as baseline GPT."""
@@ -216,34 +245,29 @@ class K1CompleteSystem(nn.Module):
         # Compute gradients (same as baseline)
         loss.backward()
         
-        # ALWAYS update embeddings and output (shared infrastructure)
-        with torch.no_grad():
-            for param in self.token_embedding.parameters():
-                if param.grad is not None:
-                    param.data -= self.learning_rate * param.grad
-            for param in self.pos_embedding.parameters():
-                if param.grad is not None:
-                    param.data -= self.learning_rate * param.grad
-            for param in self.ln_final.parameters():
-                if param.grad is not None:
-                    param.data -= self.learning_rate * param.grad
-            # Note: output_proj shares weights with token_embedding
-        
-        # Find which blocks are responsible (NEW!)
+        # Find which blocks are responsible
         responsible_blocks = self.find_responsible_blocks()
+        responsible_set = set(b for b, _ in responsible_blocks)
         
-        # Update ONLY responsible blocks (not all like baseline!)
-        updated = 0
-        with torch.no_grad():
-            for block, resp in responsible_blocks:
+        # Zero gradients for NON-responsible blocks (so they don't update)
+        for block in self.blocks:
+            if block not in responsible_set:
                 for param in block.parameters():
                     if param.grad is not None:
-                        param.data -= self.learning_rate * param.grad
+                        param.grad.zero_()
+            else:
                 block.times_updated += 1
-                updated += 1
         
-        # Zero gradients
-        self.zero_grad()
+        # Apply warmup LR
+        current_lr = self._get_lr()
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = current_lr
+        
+        # Update using AdamW (embeddings + responsible blocks only)
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        
+        updated = len(responsible_blocks)
         
         return {
             'loss': loss_val,
