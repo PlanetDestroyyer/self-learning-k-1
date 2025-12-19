@@ -617,12 +617,15 @@ def main():
     
     k1_config = {
         'vocab_size': actual_vocab_size,
-        'embed_dim': config['model']['embed_dim'],
+        'embed_dim': 128,    # MATCH baseline
+        'num_layers': 12,    # MATCH baseline (was 4 before!)
+        'num_heads': 4,      # MATCH baseline
+        'ff_dim': 512,       # MATCH baseline
         'hidden_dim': config['model']['hidden_dim'],
         'max_seq_len': config['model']['max_seq_len'],
         'learning_rate': config['training']['learning_rate'],
         'top_k': config['k1_system']['credit_assignment']['top_k_agents'],
-        'phase_1_duration': 10000,  # Phase 2 activates at 10k iterations
+        'phase_1_duration': 10000,
     }
     
     k1_model = create_k1_complete_model(k1_config)
