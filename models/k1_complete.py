@@ -105,9 +105,9 @@ class K1CompleteSystem(nn.Module):
         # Training params
         self.learning_rate = config.get('learning_rate', 1e-4)
         self.top_k = config.get('top_k', 5)
-        self.trust_threshold = config.get('trust_threshold', 0.7)
-        self.trust_increase = config.get('trust_increase', 0.1)
-        self.trust_decay = config.get('trust_decay', 0.995)
+        self.trust_threshold = config.get('trust_threshold', 0.95)  # HIGHER so agents learn more
+        self.trust_increase = config.get('trust_increase', 0.03)    # SLOWER trust buildup
+        self.trust_decay = config.get('trust_decay', 0.998)         # SLOWER decay
         
         # LOO attribution settings
         self.loo_interval = config.get('loo_interval', 50)  # Compute LOO every N steps

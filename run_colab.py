@@ -451,7 +451,7 @@ def compare_models(k1_model: K1CompleteSystem, baseline_model: BaselineGPTPyTorc
 
     print("\n4. K-1 SPECIFIC FEATURES")
     print("-" * 40)
-    print(f"  Total Agents: {k1_stats['num_agents']}")
+    print(f"  Total Agents: {k1_stats['total_agents']}")
     print(f"  Trust Updates: {k1_stats.get('trust_updates', 'N/A')}")
     print(f"  Structural Changes: {k1_stats.get('structural_changes', 'N/A')}")
 
