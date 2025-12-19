@@ -89,7 +89,7 @@ class K1CompleteSystem(nn.Module):
         self.learning_rate = config.get('learning_rate', 1e-4)
         
         # How many agents to update per step (the ones most responsible for error)
-        self.num_responsible = config.get('num_responsible', 3)
+        # Adaptive selection: agents above mean gradient get updated
         
         # Phase tracking
         self.current_iteration = 0
@@ -144,14 +144,12 @@ class K1CompleteSystem(nn.Module):
     
     def find_responsible_agents(self) -> List[tuple]:
         """
-        Find which agents are MOST responsible for the current error.
-        Uses gradient magnitude as proxy for responsibility.
-        Higher gradient = agent contributed more to error = needs update.
+        Find which agents are responsible for the current error.
+        ADAPTIVE: Update agents with gradient above mean (not fixed top-K).
         """
         responsibilities = []
         
         for agent in self.agents:
-            # Sum of absolute gradients = how much this agent affects the loss
             grad_sum = 0.0
             param_count = 0
             for param in agent.parameters():
@@ -159,7 +157,6 @@ class K1CompleteSystem(nn.Module):
                     grad_sum += param.grad.abs().sum().item()
                     param_count += param.numel()
             
-            # Normalize by parameter count
             if param_count > 0:
                 responsibility = grad_sum / param_count
             else:
@@ -168,10 +165,16 @@ class K1CompleteSystem(nn.Module):
             agent.error_responsibility = responsibility
             responsibilities.append((agent, responsibility))
         
-        # Sort by responsibility (highest first)
-        responsibilities.sort(key=lambda x: x[1], reverse=True)
+        # ADAPTIVE SELECTION: Update agents above mean responsibility
+        mean_resp = np.mean([r for _, r in responsibilities])
         
-        return responsibilities
+        # Select agents above mean (they're more responsible than average)
+        responsible = [(a, r) for a, r in responsibilities if r > mean_resp]
+        
+        # Sort by responsibility (highest first)
+        responsible.sort(key=lambda x: x[1], reverse=True)
+        
+        return responsible
     
     def train_step(self, x: torch.Tensor, y: torch.Tensor) -> Dict:
         """
@@ -209,11 +212,8 @@ class K1CompleteSystem(nn.Module):
                 if param.grad is not None:
                     param.data -= self.learning_rate * param.grad
         
-        # Find which agents are responsible for this error
-        responsibilities = self.find_responsible_agents()
-        
-        # Update ONLY the most responsible agents
-        responsible_agents = responsibilities[:self.num_responsible]
+        # Find which agents are responsible (ADAPTIVE - above mean gradient)
+        responsible_agents = self.find_responsible_agents()
         
         updated = 0
         with torch.no_grad():
