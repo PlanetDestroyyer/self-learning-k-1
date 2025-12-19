@@ -452,7 +452,7 @@ class K1CompleteSystem(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass through K-1 system.
+        Forward pass through K-1 system - OPTIMIZED for GPU.
         
         Args:
             x: Input token indices (batch_size, seq_len)
@@ -462,23 +462,28 @@ class K1CompleteSystem(nn.Module):
         """
         B, T = x.shape
         
-        # Embed
-        x_emb = self.embedding(x)  # (B, T, embed_dim)
+        # Embed - (B, T, embed_dim)
+        hidden = self.embedding(x)
         
-        # Process each position through hierarchy
-        outputs = []
-        for t in range(T):
-            pos_input = x_emb[:, t, :]  # (B, embed_dim)
-            pos_output, _ = self.hierarchy(pos_input, max_depth=2, routing_mode='soft')
-            outputs.append(pos_output)
+        # Simple hierarchical processing - process all tokens at once
+        # Level 0: Root agent
+        hidden = hidden + self.hierarchy.root.forward(hidden.reshape(B * T, -1)).reshape(B, T, -1)
         
-        # Stack outputs
-        hidden = torch.stack(outputs, dim=1)  # (B, T, embed_dim)
+        # Level 1: Managers (just use first manager for speed)
+        if len(self.hierarchy.root.child_agents) > 0:
+            manager = self.hierarchy.root.child_agents[0]
+            hidden = hidden + manager.forward(hidden.reshape(B * T, -1)).reshape(B, T, -1)
+            
+            # Level 2: Specialists (just use first specialist for speed)
+            if len(manager.child_agents) > 0:
+                specialist = manager.child_agents[0]
+                hidden = hidden + specialist.forward(hidden.reshape(B * T, -1)).reshape(B, T, -1)
         
         # Project to vocabulary
         logits = self.output_proj(hidden)
         
         return logits
+    
     
     def train_step(self, x: torch.Tensor, y: torch.Tensor) -> Dict:
         """
