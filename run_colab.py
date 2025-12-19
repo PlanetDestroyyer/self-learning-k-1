@@ -196,22 +196,23 @@ def train_k1_model(model: K1CompleteSystem, train_loader: DataLoader, val_loader
             # K-1 trust-based training step
             metrics = model.train_step(x_batch, y_batch)
             
-            # Record metrics
+            # Record metrics (updated for new implementation)
             history['train_loss'].append(metrics['loss'])
-            history['improvement'].append(metrics['improvement'])
-            history['num_updated_agents'].append(metrics['num_updated_agents'])
-            history['active_agents'].append(metrics['total_active_agents'])
+            history['improvement'].append(metrics.get('skipped', 0))  # Track skipped agents
+            history['num_updated_agents'].append(metrics['updated'])
+            history['active_agents'].append(metrics['total_agents'])
             history['avg_trust'].append(metrics['avg_trust'])
             history['phase'].append(metrics['phase'])
 
             # Logging
             if step % log_every == 0 and verbose:
-                stats = model.get_stats()
                 elapsed = time.time() - start_time
+                loo_str = " [LOO]" if metrics.get('loo_computed', False) else ""
                 print(f"Step {step:5d} (Ep {epoch}) | Loss: {metrics['loss']:.4f} | "
-                      f"Updated: {metrics['num_updated_agents']}/{metrics['total_active_agents']} agents | "
+                      f"Updated: {metrics['updated']}/{metrics['total_agents']} agents | "
+                      f"Skipped: {metrics.get('skipped', 0)} | "
                       f"Trust: {metrics['avg_trust']:.3f} | "
-                      f"Phase: {metrics['phase']} | "
+                      f"Phase: {metrics['phase']}{loo_str} | "
                       f"Time: {elapsed:.1f}s")
 
             # Evaluation
