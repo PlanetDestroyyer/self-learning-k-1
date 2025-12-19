@@ -245,37 +245,31 @@ class K1CompleteSystem(nn.Module):
         # Compute gradients (same as baseline)
         loss.backward()
         
-        # Find which blocks are responsible
+        # Track which blocks would be "responsible" (for interpretability only)
         responsible_blocks = self.find_responsible_blocks()
-        responsible_set = set(b for b, _ in responsible_blocks)
-        
-        # Zero gradients for NON-responsible blocks (so they don't update)
-        for block in self.blocks:
-            if block not in responsible_set:
-                for param in block.parameters():
-                    if param.grad is not None:
-                        param.grad.zero_()
-            else:
-                block.times_updated += 1
+        for block, _ in responsible_blocks:
+            block.times_updated += 1
         
         # Apply warmup LR
         current_lr = self._get_lr()
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = current_lr
         
-        # Update using AdamW (embeddings + responsible blocks only)
+        # Update ALL layers (FAIR COMPARISON - same as baseline!)
         self.optimizer.step()
         self.optimizer.zero_grad()
         
+        # Report how many would have been "responsible"
         updated = len(responsible_blocks)
         
         return {
             'loss': loss_val,
-            'updated': updated,
-            'skipped': len(self.blocks) - updated,
+            'updated': len(self.blocks),  # ALL blocks update now
+            'skipped': 0,                  # None skipped
             'total_agents': len(self.blocks),
             'avg_trust': 0.5,
             'high_trust': 0,
+            'responsible': updated,        # How many were "responsible"
             'loo_computed': False,
             'phase': 'Phase 2' if self.phase_2_active else 'Phase 1'
         }
