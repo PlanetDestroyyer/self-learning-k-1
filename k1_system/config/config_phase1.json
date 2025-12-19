@@ -2,7 +2,22 @@
   "system": {
     "name": "Self-Learning K-1 System",
     "phase_1_duration": 10000,
-    "seed": 42
+    "description": "Two-phase self-learning system with autonomous optimization"
+  },
+  "model": {
+    "input_dim": 128,
+    "hidden_dim": 256,
+    "output_dim": 128,
+    "vocab_size": 256,
+    "embed_dim": 128,
+    "max_seq_len": 64
+  },
+  "hierarchy": {
+    "num_domains": 4,
+    "agents_per_domain": 4,
+    "depth": 3,
+    "branching_factor": 4,
+    "agents_per_level": [1, 4, 16]
   },
   "trust": {
     "initial": 0.3,
@@ -10,7 +25,10 @@
     "cache_threshold": 0.7,
     "error_penalty_multiplier": 0.9,
     "success_reward_multiplier": 0.5,
-    "success_reward_cap": 0.3
+    "success_reward_cap": 0.3,
+    "decay_rate": 0.01,
+    "min_trust": 0.0,
+    "max_trust": 1.0
   },
   "structure": {
     "min_agents_per_manager": 3,
@@ -21,8 +39,9 @@
   },
   "learning": {
     "top_k": 3,
-    "learning_rate": 0.001,
-    "batch_size": 32
+    "learning_rate": 0.0001,
+    "batch_size": 64,
+    "gradient_clip": 1.0
   },
   "operations": {
     "prune_interval": 10000,
@@ -34,12 +53,16 @@
     "trust_threshold": 0.2,
     "usage_threshold": 50,
     "dormancy_threshold": 10000,
-    "validation_drop_threshold": 0.05
+    "validation_drop_threshold": 0.05,
+    "enabled": true,
+    "check_interval": 500
   },
   "merging": {
     "similarity_threshold": 0.85,
     "min_trust": 0.3,
-    "validation_drop_threshold": 0.05
+    "validation_drop_threshold": 0.05,
+    "enabled": true,
+    "check_interval": 500
   },
   "growing": {
     "error_cluster_min_size": 100,
@@ -47,12 +70,22 @@
     "new_agent_initial_trust": 0.3,
     "validation_period": 1000,
     "success_threshold": 0.2,
-    "failure_threshold": 0.05
+    "failure_threshold": 0.05,
+    "enabled": true,
+    "performance_threshold": 0.9,
+    "max_new_agents": 3,
+    "check_interval": 1000
+  },
+  "reorganization": {
+    "enabled": true,
+    "check_interval": 2000,
+    "max_moves_per_cycle": 0.1
   },
   "exploration": {
     "initial_rate": 0.3,
     "decay_constant": 100000,
-    "minimum_rate": 0.05
+    "minimum_rate": 0.05,
+    "decay": 0.995
   },
   "rollback": {
     "max_snapshots": 5,
@@ -61,6 +94,43 @@
   "stopping": {
     "max_iterations": 500000,
     "patience": 50000,
-    "min_improvement": 0.001
+    "min_improvement": 0.001,
+    "enabled": true
+  },
+  "autonomy": {
+    "parameter_control": {
+      "enabled": true,
+      "lr_adjustment_rate": 0.1,
+      "min_lr": 1e-6,
+      "max_lr": 0.01
+    },
+    "early_stopping": {
+      "enabled": true,
+      "patience": 1000,
+      "min_improvement": 0.001
+    }
+  },
+  "safety": {
+    "snapshot_interval": 1000,
+    "max_snapshots": 5,
+    "rollback_threshold": 0.5
+  },
+  "data": {
+    "dataset": "wikitext-2",
+    "train_split": 0.9,
+    "val_split": 0.05,
+    "test_split": 0.05
+  },
+  "training": {
+    "learning_rate": 0.0001,
+    "max_steps": 10000,
+    "eval_every": 500,
+    "log_every": 100,
+    "num_epochs": 30
+  },
+  "comparison": {
+    "metrics": ["loss", "perplexity", "accuracy", "generation_quality"],
+    "num_generation_samples": 5,
+    "generation_length": 100
   }
 }
