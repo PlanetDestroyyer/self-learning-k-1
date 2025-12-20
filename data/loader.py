@@ -112,20 +112,35 @@ class DataLoader:
             return self._generate_synthetic()
 
     def _download_wikitext(self):
-        """Download WikiText-2 dataset."""
-        url = 'https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip'
-        zip_path = self.data_dir / 'wikitext-2-v1.zip'
+        """Download WikiText-2 dataset using HuggingFace datasets."""
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            print("Installing 'datasets' library...")
+            import subprocess
+            subprocess.check_call(['pip', 'install', '-q', 'datasets'])
+            from datasets import load_dataset
 
-        print("Downloading WikiText-2...")
+        wikitext_dir = self.data_dir / 'wikitext-2'
+
+        print("Downloading WikiText-2 from HuggingFace...")
 
         try:
-            urllib.request.urlretrieve(url, zip_path)
+            dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', cache_dir=str(self.data_dir))
 
-            print("Extracting...")
-            with zipfile.ZipFile(zip_path, 'r') as z:
-                z.extractall(self.data_dir)
+            # Create directory and save text files
+            wikitext_dir.mkdir(exist_ok=True)
 
-            os.remove(zip_path)
+            print("Saving dataset files...")
+            with open(wikitext_dir / 'wiki.train.tokens', 'w', encoding='utf-8') as f:
+                f.write('\n'.join(dataset['train']['text']))
+
+            with open(wikitext_dir / 'wiki.valid.tokens', 'w', encoding='utf-8') as f:
+                f.write('\n'.join(dataset['validation']['text']))
+
+            with open(wikitext_dir / 'wiki.test.tokens', 'w', encoding='utf-8') as f:
+                f.write('\n'.join(dataset['test']['text']))
+
             print("WikiText-2 downloaded successfully")
 
         except Exception as e:
