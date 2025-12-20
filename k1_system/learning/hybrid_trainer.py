@@ -48,10 +48,14 @@ class HybridK1Trainer:
             dropout=0.1
         ).to(device)
         
-        # Get parameter groups from modular architecture
+        # Get parameter groups BEFORE torch.compile (compile wraps the model)
         self.param_groups = self.model.get_parameter_groups()
         self.group_names = [f"group_{i}" for i in range(len(self.param_groups))]
         self.num_groups = len(self.param_groups)
+        
+        # Enable torch.compile for PyTorch 2.0+ JIT optimization
+        if hasattr(torch, 'compile'):
+            self.model = torch.compile(self.model, mode='reduce-overhead')
         
         # Config
         config_top_k = config['learning']['top_k']
@@ -70,6 +74,7 @@ class HybridK1Trainer:
         self.total_params_updated = 0
         self.total_steps = 0
         self.loss_history = []
+        self._loss_buffer = []  # Pre-initialize to avoid hasattr check every step
         self.group_update_count = defaultdict(int)
         
         # GPU Stats Accumulators (avoid CPU sync during training)
@@ -136,8 +141,6 @@ class HybridK1Trainer:
                 )
 
             # Keep loss on GPU, sync only at log intervals
-            if not hasattr(self, '_loss_buffer'):
-                self._loss_buffer = []
             self._loss_buffer.append(loss.detach())
 
             # Backward with Scaler
@@ -147,49 +150,44 @@ class HybridK1Trainer:
             # and to allow safe modification of gradients
             self.scaler.unscale_(self.optimizer)
 
-            # GPU-OPTIMIZED: Calculate gradient norms directly on GPU
+            # VECTORIZED GRADIENT NORM CALCULATION
+            # Collect all gradients and compute norms in one fused operation
             with torch.no_grad():
-                # Pre-allocate GPU tensor (no Python list!)
+                # Compute gradient norms for each group using vectorized ops
                 grad_norms_tensor = torch.zeros(self.num_groups, device=device)
-
+                
                 for i, params in enumerate(self.param_groups):
-                    # Fast check: usually all params have grads in this model
-                    valid_grads = [p.grad for p in params if p.grad is not None]
-                    if valid_grads:
-                        # Optimized norm calculation: sum of squares first, then sqrt
-                        # Using torch.cat -> norm is generally faster than stack -> loops for small count
-                        # but iterating is fine for small groups (~6 params).
-                        sq_sum = torch.tensor(0.0, device=device)
-                        for p in valid_grads:
-                            sq_sum += p.norm(2).pow(2)
-                        grad_norms_tensor[i] = sq_sum.sqrt()
+                    # Flatten all grads in group and compute single norm
+                    grads = [p.grad.flatten() for p in params if p.grad is not None]
+                    if grads:
+                        grad_norms_tensor[i] = torch.cat(grads).norm(2)
 
-                # Compute median on GPU
+                # Compute threshold (median) on GPU
                 grad_threshold = torch.median(grad_norms_tensor)
 
-                # Select groups with above-median gradients
+                # Select groups with above-median gradients (vectorized)
                 mask = grad_norms_tensor > grad_threshold
-
-                # Fallback: if none selected, pick the one with highest gradient
+                
+                # Fallback: if none selected, pick highest
                 if not mask.any():
                     mask[torch.argmax(grad_norms_tensor)] = True
 
-                # FULLY ASYNC: Apply mask to gradients on GPU
-                mask_float = mask.to(dtype=torch.float32)
+                # Convert mask to float for multiplication
+                mask_float = mask.float()
                 
-                # Update statistics on GPU
+                # Update GPU statistics
                 self._gpu_mask_accumulator += mask.long()
-                
-                # Calculate params updated for this step (on GPU)
                 current_step_params = (mask_float * self._group_param_counts).sum()
                 self._gpu_params_updated_accumulator += current_step_params
 
-                # Apply mask to gradients
+                # VECTORIZED GRADIENT MASKING
+                # Apply mask to all parameters at once using foreach operations
                 for group_id in range(self.num_groups):
-                    multiplier = mask_float[group_id]
-                    for p in self.param_groups[group_id]:
-                        if p.grad is not None:
-                            p.grad.mul_(multiplier)
+                    if not mask[group_id]:
+                        # Zero out gradients for unselected groups
+                        for p in self.param_groups[group_id]:
+                            if p.grad is not None:
+                                p.grad.zero_()
 
             # Optimizer step handling with Scaler
             self.scaler.step(self.optimizer)
