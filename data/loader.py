@@ -80,6 +80,28 @@ class DataLoader:
             # Assume it's a file path
             text = self._load_custom(self.dataset_name)
 
+        # Build vocabulary
+        print("Building vocabulary...")
+        self._build_vocabulary(text)
+
+        # Convert to sequences
+        print("Creating sequences...")
+        sequences = self._text_to_sequences(text)
+
+        # Split data
+        n_train = int(len(sequences) * 0.9)
+        n_val = int(len(sequences) * 0.05)
+
+        self.train_data = sequences[:n_train]
+        self.val_data = sequences[n_train:n_train + n_val]
+        self.test_data = sequences[n_train + n_val:]
+
+        print(f"Dataset loaded:")
+        print(f"  Train: {len(self.train_data):,} sequences")
+        print(f"  Val: {len(self.val_data):,} sequences")
+        print(f"  Test: {len(self.test_data):,} sequences")
+        print(f"  Vocab: {len(self.vocab):,} words")
+
     def _ensure_datasets_library(self):
         """Ensure datasets library is installed."""
         try:
@@ -192,38 +214,16 @@ class DataLoader:
         ]
         topics = ["neural networks", "quantum computing", "gene editing", "climate models"]
         methods = ["deep learning", "bayesian inference", "CRISPR", "simulation"]
-        
+
         text = []
         for _ in range(5000):
             import random
             t = random.choice(templates)
-            text.append(t.format(topic=random.choice(topics), 
-                               method=random.choice(methods), 
-                               metric="accuracy", 
+            text.append(t.format(topic=random.choice(topics),
+                               method=random.choice(methods),
+                               metric="accuracy",
                                issue="scalability"))
         return "\n".join(text)
-
-        # Build vocabulary
-        print("Building vocabulary...")
-        self._build_vocabulary(text)
-
-        # Convert to sequences
-        print("Creating sequences...")
-        sequences = self._text_to_sequences(text)
-
-        # Split data
-        n_train = int(len(sequences) * 0.9)
-        n_val = int(len(sequences) * 0.05)
-
-        self.train_data = sequences[:n_train]
-        self.val_data = sequences[n_train:n_train + n_val]
-        self.test_data = sequences[n_train + n_val:]
-
-        print(f"Dataset loaded:")
-        print(f"  Train: {len(self.train_data):,} sequences")
-        print(f"  Val: {len(self.val_data):,} sequences")
-        print(f"  Test: {len(self.test_data):,} sequences")
-        print(f"  Vocab: {len(self.vocab):,} words")
 
     def _load_wikitext(self) -> str:
         """Load WikiText-2 dataset."""

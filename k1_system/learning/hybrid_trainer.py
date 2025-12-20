@@ -168,16 +168,19 @@ class HybridK1Trainer:
         print("Training Complete")
         print(f"{'='*70}")
         print(f"Total steps: {self.total_steps:,}")
-        print(f"Avg params updated: {self.total_params_updated // self.total_steps:,} "
-              f"({100 * self.total_params_updated / (self.total_steps * self.total_params):.1f}%)")
+        if self.total_steps > 0:
+            print(f"Avg params updated: {self.total_params_updated // self.total_steps:,} "
+                  f"({100 * self.total_params_updated / (self.total_steps * self.total_params):.1f}%)")
+        else:
+            print("Avg params updated: 0 (no training steps)")
         print(f"Time: {elapsed:.1f}s")
         print(f"{'='*70}\n")
-        
+
         return {
             'total_steps': self.total_steps,
             'total_params_updated': self.total_params_updated,
-            'avg_params_per_step': self.total_params_updated // self.total_steps,
-            'update_percentage': 100 * self.total_params_updated / (self.total_steps * self.total_params),
+            'avg_params_per_step': self.total_params_updated // self.total_steps if self.total_steps > 0 else 0,
+            'update_percentage': 100 * self.total_params_updated / (self.total_steps * self.total_params) if self.total_steps > 0 else 0.0,
             'time': elapsed,
             'phase_2_adjustments': 0
         }
