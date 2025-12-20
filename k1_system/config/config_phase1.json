@@ -45,8 +45,8 @@
     "exploration_rate": 0.3
   },
   "learning": {
-    "top_k": 8,
-    "top_k_min": 4,
+    "top_k": 15,
+    "top_k_min": 10,
     "top_k_max": 20,
     "learning_rate": 0.001,
     "batch_size": 64,
@@ -55,9 +55,9 @@
     "validation_interval": 5000
   },
   "selection": {
-    "gradient_weight": 0.7,
-    "trust_weight": 0.2,
-    "diversity_weight": 0.1,
+    "gradient_weight": 0.4,
+    "trust_weight": 0.3,
+    "diversity_weight": 0.3,
     "diversity_window": 100
   },
   "trust_update": {
@@ -150,7 +150,7 @@
     "test_split": 0.05
   },
   "training": {
-    "learning_rate": 0.0001,
+    "learning_rate": 0.001,
     "max_steps": 10000,
     "eval_every": 500,
     "log_every": 100,

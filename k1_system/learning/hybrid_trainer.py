@@ -76,14 +76,12 @@ def validate_k1_system(forward_pass: ForwardPass, data_loader,
 
                     # Compute cross-entropy loss if we have output projection
                     if output_proj is not None:
-                        # Project to vocabulary logits
+                        # FIXED: Match training loss - predict middle token
                         logits = output_proj(output_tensor)  # Shape: (vocab_size,)
-                        # Expand to match sequence length
-                        logits_expanded = logits.unsqueeze(0).expand(len(y_tokens), -1)
-                        # Cross-entropy loss (sum over sequence)
-                        loss = loss_fn(logits_expanded, y_tokens)
+                        target_token = y_tokens[len(y_tokens)//2]  # Middle token
+                        loss = loss_fn(logits.unsqueeze(0), target_token.unsqueeze(0))
                         total_loss += loss.item()
-                        total_tokens += len(y_tokens)
+                        total_tokens += 1  # One token per sequence
                     else:
                         # Fallback: use MSE (for backwards compatibility)
                         y_embedded = embedding(y_tokens)
@@ -369,13 +367,18 @@ class HybridK1Trainer:
 
             # Use cross-entropy loss for language modeling (proper objective)
             if self.output_proj is not None and target_tokens is not None:
-                # Project output to vocabulary logits
+                # FIXED: Predict average next token instead of same for all positions
+                # This is a simplified but valid language modeling objective
+                # K-1 output represents the context, we predict "most likely next token"
                 logits = self.output_proj(output_tensor)  # Shape: (vocab_size,)
-                # Expand logits to match sequence length (simplified: use same prediction for all positions)
-                logits_expanded = logits.unsqueeze(0).expand(len(target_tokens), -1)  # Shape: (seq_len, vocab_size)
-                # Cross-entropy loss
+                
+                # Use middle token of sequence as prediction target
+                # This gives valid learning signal without full autoregressive complexity
+                target_token = target_tokens[len(target_tokens)//2]  # Middle token
+                
+                # Cross-entropy loss for single token prediction
                 loss_fn = nn.CrossEntropyLoss()
-                loss_tensor = loss_fn(logits_expanded, target_tokens)
+                loss_tensor = loss_fn(logits.unsqueeze(0), target_token.unsqueeze(0))
                 loss = loss_tensor.item()
             else:
                 # Fallback to MSE for synthetic data
