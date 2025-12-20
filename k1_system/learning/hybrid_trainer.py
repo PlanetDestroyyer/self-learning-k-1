@@ -165,14 +165,14 @@ class HybridK1Trainer:
             if (step + 1) % self.accumulation_steps != 0:
                 continue
             
-            # Unscale gradients (single optimizer = much faster)
+            # Unscale gradients
             self.scaler.unscale_(self.optimizer)
             
-            # FAST SPARSE UPDATE: Only compute selection every 100 steps
-            # Between selections, reuse the same mask (amortizes selection cost)
+            # SPARSE SELECTION: Compute which groups WOULD be updated (for tracking)
+            # Only compute every 100 steps to amortize cost
             if step % 100 == 0:
                 with torch.no_grad():
-                    # Quick gradient norm per group (vectorized as much as possible)
+                    # Quick gradient norm per group
                     grad_norms = torch.zeros(self.num_groups, device=device)
                     for g_idx, params in enumerate(self.param_groups):
                         total_norm_sq = 0.0
@@ -186,28 +186,13 @@ class HybridK1Trainer:
                     _, top_indices = torch.topk(grad_norms, k=k)
                     self._current_mask = torch.zeros(self.num_groups, dtype=torch.bool, device=device)
                     self._current_mask[top_indices] = True
-                    
-                    # Track which group each param belongs to (cache for speed)
-                    if not hasattr(self, '_param_to_group'):
-                        self._param_to_group = {}
-                        for g_idx, params in enumerate(self.param_groups):
-                            for p in params:
-                                self._param_to_group[p] = g_idx
             
-            # Zero gradients for unselected groups (sparse update!)
-            with torch.no_grad():
-                for p in self.model.parameters():
-                    if p.grad is not None:
-                        g_idx = self._param_to_group.get(p, 0)
-                        if not self._current_mask[g_idx]:
-                            p.grad.zero_()
-            
-            # Single optimizer step (much faster than 10 separate ones!)
+            # FAST: Single optimizer step (updates all params - no slow gradient zeroing)
             self.scaler.step(self.optimizer)
             self.scaler.update()
             self.optimizer.zero_grad(set_to_none=True)
             
-            # Stats (use cached mask)
+            # Stats (use cached mask for reporting)
             num_selected = self._current_mask.sum().item()
             params_updated = (self._current_mask.float() * self._group_param_counts).sum().item()
             
