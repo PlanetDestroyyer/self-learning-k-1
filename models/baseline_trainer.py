@@ -19,10 +19,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class BaselineTrainer:
     """
-    BASELINE: Traditional backpropagation with a real transformer model.
-    
-    Uses the BaselineGPTPyTorch model for actual training, not simulation.
-    This provides a fair comparison with the K-1 system.
+    BASELINE: Traditional backpropagation with a simple feed-forward model.
+
+    Uses a simple embedding + feed-forward architecture for fair comparison.
+    Updates ALL parameters on every step (no sparse updates).
     """
     
     def __init__(self, config: Dict, data_loader=None):

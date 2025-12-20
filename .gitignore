@@ -32,10 +32,15 @@ venv.bak/
 
 # Project Specific
 data/wikitext-2/
+data/wikitext/
+data/code_python/
+data/scientific/
+data/*.lock
 data/wikitext-2-v1.zip
 data/*.npy
 data/*.pkl
 logs/
+models/*.pt
 training_comparison.png
 *.log
 
