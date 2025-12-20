@@ -46,9 +46,7 @@ save_path = 'models/k1_dataset1.pt'
 os.makedirs('models', exist_ok=True)
 
 torch.save({
-    'embedding': trainer.embedding.state_dict(),
-    'network': trainer.network.state_dict(),
-    'output_proj': trainer.output_proj.state_dict(),
+    'model': trainer.model.state_dict(),  # Save entire model
     'config': config,
     'results': results,
     'vocab_size': trainer.vocab_size
