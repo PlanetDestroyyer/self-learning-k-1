@@ -167,6 +167,9 @@ class MultiHeadAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+        # Pre-compute scaling factor
+        self.scale = self.head_dim ** -0.5
+
         # Pre-compute causal mask once (MAJOR SPEEDUP!)
         causal_mask = torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
         self.register_buffer('causal_mask', causal_mask)
@@ -180,7 +183,7 @@ class MultiHeadAttention(nn.Module):
         V = self.v_proj(value).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         
         # Attention scores
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.head_dim)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
 
         # Use pre-computed causal mask (slice to current seq_len)
         if mask is None:
