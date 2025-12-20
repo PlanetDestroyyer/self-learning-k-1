@@ -141,17 +141,39 @@ class HybridK1Trainer:
 
         self.vocab_size = config['model'].get('vocab_size', 256)
         
-        # Embedding layer for token indices -> vectors (if using WikiText)
+        # Use TransformerEncoder for SOTA sequence processing (if using WikiText)
         if data_loader is not None:
+            from ..core.transformer_agent import TransformerEncoder
+            
             vocab_size = data_loader.get_vocab_size()
             self.vocab_size = vocab_size
             embed_dim = config['model']['input_dim']
-            self.embedding = nn.Embedding(vocab_size, embed_dim).to(device)
-            # Output projection: embed_dim -> vocab_size for token prediction
-            self.output_proj = nn.Linear(config['model']['output_dim'], vocab_size).to(device)
-            print(f"Created embedding layer: {vocab_size} tokens -> {embed_dim} dims")
-            print(f"Created output projection: {config['model']['output_dim']} dims -> {vocab_size} tokens")
+            hidden_dim = config['model']['hidden_dim']
+            output_dim = config['model']['output_dim']
+            
+            # SOTA Transformer encoder (replaces simple embedding + mean-pooling)
+            self.encoder = TransformerEncoder(
+                vocab_size=vocab_size,
+                embed_dim=embed_dim,
+                hidden_dim=hidden_dim,
+                output_dim=output_dim,
+                n_heads=4,
+                n_layers=2,
+                dropout=0.1,
+                max_seq_len=config['model'].get('max_seq_len', 64)
+            ).to(device)
+            
+            # For backward compatibility
+            self.embedding = self.encoder.embedding
+            
+            # Output projection: output_dim -> vocab_size for token prediction
+            self.output_proj = nn.Linear(output_dim, vocab_size).to(device)
+            
+            print(f"Created TransformerEncoder: {vocab_size} vocab, {embed_dim}→{hidden_dim}→{output_dim} dims")
+            print(f"  Architecture: 2 transformer blocks, 4 attention heads")
+            print(f"Created output projection: {output_dim} dims -> {vocab_size} tokens")
         else:
+            self.encoder = None
             self.embedding = None
             self.output_proj = None
 
@@ -307,11 +329,16 @@ class HybridK1Trainer:
                     x_tokens = x_batch[0]  # Shape: (seq_len,)
                     y_tokens = y_batch[0]  # Shape: (seq_len,) - target tokens for cross-entropy
                     
-                    # Convert tokens to embeddings
-                    x_embedded = self.embedding(x_tokens)  # Shape: (seq_len, embed_dim)
-                    # Use mean pooling to get input vector for K-1 hierarchy
-                    x_vector = torch.mean(x_embedded, dim=0)  # Shape: (embed_dim,)
-                    x = x_vector.detach().cpu().numpy()
+                    # Use TransformerEncoder for SOTA sequence processing
+                    if self.encoder is not None:
+                        # Process through transformer (multi-head attention, not mean-pooling)
+                        x_encoded = self.encoder(x_tokens.unsqueeze(0))  # (1, output_dim)
+                        x = x_encoded.squeeze(0).detach().cpu().numpy()  # (output_dim,)
+                    else:
+                        # Fallback to mean-pooling
+                        x_embedded = self.embedding(x_tokens)
+                        x_vector = torch.mean(x_embedded, dim=0)
+                        x = x_vector.detach().cpu().numpy()
                     
                     # Store tokens for cross-entropy loss
                     target_tokens = y_tokens  # Keep as tensor for cross-entropy
@@ -331,8 +358,8 @@ class HybridK1Trainer:
                 x = torch.randn(self.config['model']['input_dim'], device=device).cpu().numpy()
                 target_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
 
-            # Forward pass through K-1 system
-            output, routing_path = self.forward_pass.forward(x, mode='hard')
+            # Forward pass through K-1 system (soft routing activates multiple agents)
+            output, routing_path = self.forward_pass.forward(x, mode='soft')
 
             # Compute loss
             if isinstance(output, np.ndarray):

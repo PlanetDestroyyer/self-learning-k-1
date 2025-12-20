@@ -1,7 +1,7 @@
 {
   "system": {
     "name": "Self-Learning K-1 System",
-    "phase_1_duration": 10000,
+    "phase_1_duration": 2000,
     "description": "Two-phase self-learning system with autonomous optimization"
   },
   "model": {
@@ -14,7 +14,7 @@
   },
   "hierarchy": {
     "num_domains": 4,
-    "agents_per_domain": 4,
+    "agents_per_domain": 8,
     "depth": 3,
     "branching_factor": 4,
     "agents_per_level": [
@@ -42,10 +42,10 @@
     "routing_confidence_threshold": 0.5
   },
   "learning": {
-    "top_k": 3,
-    "top_k_min": 2,
-    "top_k_max": 10,
-    "learning_rate": 0.0001,
+    "top_k": 8,
+    "top_k_min": 4,
+    "top_k_max": 20,
+    "learning_rate": 0.001,
     "batch_size": 64,
     "gradient_clip": 1.0,
     "log_interval": 10000,
