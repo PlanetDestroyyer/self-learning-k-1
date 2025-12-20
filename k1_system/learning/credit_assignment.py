@@ -1,11 +1,13 @@
 """
-Credit assignment for the Self-Learning K-1 System.
+Credit assignment for the Self-Learning K-1 System (PyTorch version).
 
-Uses trust-based responsibility assignment instead of traditional backpropagation.
-Selects top-K agents for update based on responsibility and trust.
+Uses gradient-based responsibility + trust for agent selection.
+Computes real gradients via PyTorch autograd, then selects top-K agents.
 """
 
-from typing import List, Tuple
+import torch
+import torch.nn.functional as F
+from typing import List, Tuple, Union
 import numpy as np
 from ..core.agent import Agent
 from ..core.trust_system import TrustSystem
@@ -32,46 +34,88 @@ class CreditAssignmentSystem:
 
     def assign_credit(self,
                      routing_path: RoutingPath,
-                     error: float,
-                     target: np.ndarray,
-                     prediction: np.ndarray) -> List[Agent]:
+                     target: Union[torch.Tensor, np.ndarray],
+                     prediction: Union[torch.Tensor, np.ndarray]) -> Tuple[List[Agent], torch.Tensor]:
         """
-        Assign credit to agents in the routing path.
+        Assign credit to agents using PyTorch gradients.
+
+        Computes loss, runs backward pass, then selects top-K agents by gradient magnitude.
 
         Args:
             routing_path: Path taken during forward pass
-            error: Error magnitude
-            target: Target output
-            prediction: Predicted output
+            target: Target output (tensor or numpy)
+            prediction: Predicted output (tensor or numpy)
 
         Returns:
-            List of agents selected for update
+            Tuple of (selected_agents, loss_value)
         """
+        # Convert to tensors if needed
+        if isinstance(target, np.ndarray):
+            target = torch.from_numpy(target).float()
+        if isinstance(prediction, np.ndarray):
+            prediction = torch.from_numpy(prediction).float()
+
+        # Move to same device as prediction
+        if target.device != prediction.device:
+            target = target.to(prediction.device)
+
+        # Compute loss (MSE for now)
+        loss = F.mse_loss(prediction, target)
+
+        # Backward pass to compute gradients
+        loss.backward(retain_graph=True)
+
+        # Get activated agents
         activated_agents = routing_path.get_activated_agents()
 
         if not activated_agents:
-            return []
+            return [], loss
 
-        # Compute responsibility scores for all activated agents
-        responsibilities = self._compute_responsibilities(activated_agents, error)
+        # Compute gradient magnitudes (our "responsibility")
+        gradient_magnitudes = self._compute_gradient_magnitudes(activated_agents)
 
-        # Rank agents by responsibility weighted by trust
+        # Rank agents by gradient magnitude weighted by trust
         ranked_agents = self._rank_by_trust_weighted_responsibility(
-            activated_agents, responsibilities
+            activated_agents, gradient_magnitudes
         )
 
         # Select top-K agents
         selected_agents = self._select_top_k(ranked_agents)
 
-        return selected_agents
+        return selected_agents, loss
+
+    def _compute_gradient_magnitudes(self, agents: List[Agent]) -> List[float]:
+        """
+        Compute gradient magnitude for each agent (PyTorch version).
+
+        Gradient magnitude = sum of L2 norms of all parameter gradients.
+
+        Args:
+            agents: List of activated agents
+
+        Returns:
+            List of gradient magnitudes
+        """
+        gradient_magnitudes = []
+
+        for agent in agents:
+            total_grad_norm = 0.0
+            for param in agent.parameters():
+                if param.grad is not None:
+                    total_grad_norm += param.grad.data.norm(2).item() ** 2
+
+            # L2 norm
+            gradient_magnitudes.append(total_grad_norm ** 0.5)
+
+        return gradient_magnitudes
 
     def _compute_responsibilities(self,
                                  agents: List[Agent],
                                  error_magnitude: float) -> List[float]:
         """
-        Compute responsibility score for each agent.
+        Legacy method: Compute responsibility score for each agent.
 
-        Responsibility = activation_level * error_magnitude
+        NOTE: In PyTorch version, use _compute_gradient_magnitudes instead.
 
         Args:
             agents: List of activated agents

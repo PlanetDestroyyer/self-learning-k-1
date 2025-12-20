@@ -128,7 +128,7 @@ class PruningSystem:
         """
         # Temporarily remove agent
         parent = agent.parent
-        children = list(agent.children)
+        children = list(agent.child_agents)
 
         # Remove from hierarchy
         if parent:
@@ -158,7 +158,7 @@ class PruningSystem:
 
     def prune_agent(self, agent: Agent, reason: str, current_iteration: int):
         """
-        Permanently delete an agent.
+        Permanently delete an agent (with PyTorch optimizer cleanup).
 
         Args:
             agent: Agent to delete
@@ -168,12 +168,17 @@ class PruningSystem:
         # Reassign children to parent
         parent = agent.parent
         if parent:
-            for child in list(agent.children):
+            for child in list(agent.child_agents):
                 agent.remove_child(child)
                 parent.add_child(child)
 
         # Remove from hierarchy
         self.hierarchy.remove_agent(agent)
+
+        # Clean up optimizer state (PyTorch)
+        # Note: weight_updater should be set by the system that uses pruning
+        if hasattr(self, 'weight_updater') and hasattr(self.weight_updater, 'remove_agent_optimizer'):
+            self.weight_updater.remove_agent_optimizer(agent.id)
 
         # Log deletion
         self.pruning_history.append({
@@ -208,7 +213,7 @@ class PruningSystem:
 
         for agent, reason in candidates:
             # Check if deleting would violate minimum agents per manager
-            if agent.parent and len(agent.parent.children) <= self.min_agents_per_manager:
+            if agent.parent and len(agent.parent.child_agents) <= self.min_agents_per_manager:
                 protected.append(agent.id)
                 continue
 

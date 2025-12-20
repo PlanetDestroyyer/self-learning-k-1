@@ -4,6 +4,7 @@ Self-merging system for the Self-Learning K-1 System.
 Combines redundant agents to reduce complexity while maintaining performance.
 """
 
+import torch
 from typing import List, Tuple
 import numpy as np
 from itertools import combinations
@@ -215,7 +216,7 @@ class MergingSystem:
                     agent_b: Agent,
                     current_iteration: int) -> Agent:
         """
-        Merge two agents into one.
+        Merge two PyTorch agents by averaging parameters.
 
         Args:
             agent_a: First agent
@@ -235,12 +236,17 @@ class MergingSystem:
             output_dim=agent_a.output_dim,
             initial_trust=max(agent_a.trust, agent_b.trust),
             creation_iteration=current_iteration
-        )
+        ).to(agent_a.device)
 
-        # Average weights
-        for key in agent_a.weights:
-            if key in agent_b.weights:
-                merged.weights[key] = 0.5 * agent_a.weights[key] + 0.5 * agent_b.weights[key]
+        # Average PyTorch parameters
+        with torch.no_grad():
+            for (name_a, param_a), (name_b, param_b) in zip(
+                agent_a.named_parameters(), agent_b.named_parameters()
+            ):
+                # Get corresponding parameter in merged agent
+                merged_param = dict(merged.named_parameters())[name_a]
+                # Average the two parameters
+                merged_param.data = 0.5 * param_a.data + 0.5 * param_b.data
 
         # Combine performance metrics
         merged.success_count = agent_a.success_count + agent_b.success_count
@@ -273,11 +279,11 @@ class MergingSystem:
         parent = agent_a.parent
 
         # Transfer all children
-        for child in list(agent_a.children):
+        for child in list(agent_a.child_agents):
             agent_a.remove_child(child)
             merged.add_child(child)
 
-        for child in list(agent_b.children):
+        for child in list(agent_b.child_agents):
             agent_b.remove_child(child)
             merged.add_child(child)
 
@@ -299,13 +305,13 @@ class MergingSystem:
             parent.add_child(agent_a)
             parent.add_child(agent_b)
 
-        for child in list(merged.children):
+        for child in list(merged.child_agents):
             merged.remove_child(child)
 
         # Restore original children
-        for child in agent_a.children:
+        for child in agent_a.child_agents:
             agent_a.add_child(child)
-        for child in agent_b.children:
+        for child in agent_b.child_agents:
             agent_b.add_child(child)
 
         return perf_drop <= self.validation_drop_threshold
@@ -327,17 +333,22 @@ class MergingSystem:
         parent = agent_a.parent
 
         # Transfer children
-        for child in list(agent_a.children):
+        for child in list(agent_a.child_agents):
             agent_a.remove_child(child)
             merged.add_child(child)
 
-        for child in list(agent_b.children):
+        for child in list(agent_b.child_agents):
             agent_b.remove_child(child)
             merged.add_child(child)
 
         # Remove old agents
         self.hierarchy.remove_agent(agent_a)
         self.hierarchy.remove_agent(agent_b)
+
+        # Clean up optimizer state for removed agents (PyTorch)
+        if hasattr(self, 'weight_updater') and hasattr(self.weight_updater, 'remove_agent_optimizer'):
+            self.weight_updater.remove_agent_optimizer(agent_a.id)
+            self.weight_updater.remove_agent_optimizer(agent_b.id)
 
         # Add merged agent
         if parent:

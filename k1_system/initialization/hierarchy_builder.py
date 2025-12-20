@@ -4,6 +4,7 @@ Hierarchy builder for initializing the agent structure.
 Builds the initial hierarchical structure based on domain analysis.
 """
 
+import torch
 from typing import Dict, List
 from ..core.agent import Agent
 from ..core.hierarchy import Hierarchy
@@ -34,6 +35,9 @@ class HierarchyBuilder:
         self.output_dim = output_dim
         self.initial_trust = initial_trust
 
+        # Device handling for PyTorch
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     def build_hierarchy(self,
                        domain_analysis: Dict,
                        max_depth: int = 6) -> Hierarchy:
@@ -59,7 +63,7 @@ class HierarchyBuilder:
             output_dim=self.output_dim,
             initial_trust=self.initial_trust,
             creation_iteration=0
-        )
+        ).to(self.device)
 
         hierarchy.set_root(root)
 
@@ -133,7 +137,7 @@ class HierarchyBuilder:
             output_dim=self.output_dim,
             initial_trust=self.initial_trust,
             creation_iteration=0
-        )
+        ).to(self.device)
 
         hierarchy.set_root(root)
 
@@ -182,7 +186,7 @@ class HierarchyBuilder:
                      agent_type: str,
                      specialty: str) -> Agent:
         """
-        Create an agent with default parameters.
+        Create an agent with default parameters and move to device.
 
         Args:
             agent_id: Agent ID
@@ -190,9 +194,9 @@ class HierarchyBuilder:
             specialty: Agent specialty
 
         Returns:
-            Created agent
+            Created agent (on correct device)
         """
-        return Agent(
+        agent = Agent(
             agent_id=agent_id,
             agent_type=agent_type,
             specialty=specialty,
@@ -202,6 +206,8 @@ class HierarchyBuilder:
             initial_trust=self.initial_trust,
             creation_iteration=0
         )
+        # Move to device (GPU/CPU)
+        return agent.to(self.device)
 
     def _create_sub_agents(self, parent_specialty: str, num_sub_agents: int = 2) -> List[Agent]:
         """

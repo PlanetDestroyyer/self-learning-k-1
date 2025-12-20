@@ -23,8 +23,25 @@ class MetricsTracker:
 
         self.accuracy_history = deque(maxlen=window_size)
         self.loss_history = deque(maxlen=window_size)
+        self.perplexity_history = deque(maxlen=window_size)
         self.trust_history = deque(maxlen=window_size)
         self.agent_count_history = deque(maxlen=window_size)
+
+    def compute_perplexity(self, loss: float) -> float:
+        """
+        Compute perplexity from loss.
+
+        Perplexity = exp(loss). Clip to prevent overflow.
+
+        Args:
+            loss: Cross-entropy loss
+
+        Returns:
+            Perplexity value
+        """
+        # Clip loss to prevent overflow
+        clipped_loss = min(loss, 100.0)
+        return np.exp(clipped_loss)
 
     def update(self,
               iteration: int,
@@ -44,6 +61,11 @@ class MetricsTracker:
         """
         self.accuracy_history.append(accuracy)
         self.loss_history.append(loss)
+
+        # Compute and track perplexity
+        perplexity = self.compute_perplexity(loss)
+        self.perplexity_history.append(perplexity)
+
         self.trust_history.append(avg_trust)
         self.agent_count_history.append(total_agents)
 
@@ -60,6 +82,7 @@ class MetricsTracker:
         return {
             'accuracy': self.accuracy_history[-1],
             'loss': self.loss_history[-1],
+            'perplexity': self.perplexity_history[-1] if self.perplexity_history else 0.0,
             'avg_trust': self.trust_history[-1],
             'total_agents': self.agent_count_history[-1]
         }
@@ -79,6 +102,8 @@ class MetricsTracker:
             'std_accuracy': np.std(self.accuracy_history),
             'avg_loss': np.mean(self.loss_history),
             'std_loss': np.std(self.loss_history),
+            'avg_perplexity': np.mean(self.perplexity_history) if self.perplexity_history else 0.0,
+            'std_perplexity': np.std(self.perplexity_history) if self.perplexity_history else 0.0,
             'avg_trust': np.mean(self.trust_history),
             'avg_agents': np.mean(self.agent_count_history)
         }

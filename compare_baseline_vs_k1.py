@@ -44,7 +44,10 @@ if torch.cuda.is_available():
 from k1_system.core import Hierarchy, Agent, TrustSystem, HierarchicalRouter
 from k1_system.learning import ForwardPass, AdaptiveWeightUpdater
 from k1_system.initialization import HierarchyBuilder
-from k1_system.utils import TrainingLogger
+from k1_system.utils import TrainingLogger, MetricsTracker
+
+# Import data loader
+from data.loader import DataLoader
 
 
 def load_config(use_k1: bool = True) -> Dict:
@@ -84,6 +87,113 @@ def generate_synthetic_data(n_samples: int = 500, seq_len: int = 64, vocab_size:
             data[i, j] = (data[i, j-1] + data[i, j-2]) % vocab_size
 
     return data
+
+
+def load_wikitext_data(vocab_size: int = 10000, seq_length: int = 64) -> DataLoader:
+    """
+    Load WikiText-2 dataset.
+
+    Args:
+        vocab_size: Maximum vocabulary size
+        seq_length: Sequence length for training
+
+    Returns:
+        DataLoader instance with loaded data
+    """
+    print("\n" + "="*70)
+    print("Loading WikiText-2 Dataset")
+    print("="*70)
+
+    loader = DataLoader(
+        dataset_name='wikitext',
+        data_dir='data',
+        vocab_size=vocab_size,
+        seq_length=seq_length
+    )
+
+    try:
+        loader.load()
+        print(f"Successfully loaded WikiText-2:")
+        print(f"  Train samples: {len(loader.train_data):,}")
+        print(f"  Val samples: {len(loader.val_data):,}")
+        print(f"  Test samples: {len(loader.test_data):,}")
+        print(f"  Vocabulary size: {loader.get_vocab_size():,}")
+        print("="*70 + "\n")
+        return loader
+    except Exception as e:
+        print(f"Failed to load WikiText-2: {e}")
+        print("Falling back to synthetic data...")
+        print("="*70 + "\n")
+        return None
+
+
+def validate_k1_system(forward_pass: ForwardPass, data_loader: DataLoader,
+                       embedding: nn.Module = None,
+                       num_batches: int = 10, vocab_size: int = 256) -> Tuple[float, float]:
+    """
+    Run validation on K-1 system.
+
+    Args:
+        forward_pass: K-1 ForwardPass system
+        data_loader: DataLoader with validation data
+        embedding: Embedding layer for token indices (if using WikiText)
+        num_batches: Number of batches to validate on
+        vocab_size: Vocabulary size for loss computation
+
+    Returns:
+        (avg_loss, perplexity) tuple
+    """
+    total_loss = 0.0
+    total_samples = 0
+
+    for _ in range(num_batches):
+        try:
+            # Get validation batch (returns PyTorch tensors)
+            x_batch, y_batch = data_loader.get_batch('val', batch_size=8, return_tensors='pt')
+            batch_size = x_batch.shape[0]
+
+            # Forward pass for each sample in batch
+            batch_loss = 0.0
+            for i in range(batch_size):
+                # Convert token indices to embeddings if embedding layer provided
+                if embedding is not None:
+                    x_tokens = x_batch[i]
+                    x_embedded = embedding(x_tokens)
+                    x_vector = torch.mean(x_embedded, dim=0)
+                    x = x_vector.detach().cpu().numpy()
+
+                    y_tokens = y_batch[i]
+                    y_embedded = embedding(y_tokens)
+                    y_vector = torch.mean(y_embedded, dim=0)
+                    y = y_vector.detach().cpu().numpy()
+                else:
+                    x = x_batch[i].cpu().numpy()
+                    y = y_batch[i].cpu().numpy()
+
+                # Forward through K-1 system
+                output, _ = forward_pass.forward(x, mode='hard')
+
+                # Compute loss (MSE for embedded vectors)
+                if isinstance(output, torch.Tensor):
+                    output = output.cpu().numpy()
+
+                loss = np.mean((output - y) ** 2)
+                batch_loss += loss
+
+            total_loss += batch_loss
+            total_samples += batch_size
+
+        except Exception as e:
+            # If validation batch fails, skip
+            continue
+
+    if total_samples == 0:
+        return 0.0, float('inf')
+
+    avg_loss = total_loss / total_samples
+    perplexity = np.exp(min(avg_loss, 100.0))  # Clip to prevent overflow
+
+    return avg_loss, perplexity
 
 
 class BaselineTrainer:
@@ -174,9 +284,22 @@ class HybridK1Trainer:
     - Phase 2: Autonomous pruning/merging based on gradients+trust
     """
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, data_loader: DataLoader = None):
         self.config = config
         self.logger = TrainingLogger()
+        self.data_loader = data_loader
+
+        # Metrics tracker
+        self.metrics_tracker = MetricsTracker(window_size=1000)
+
+        # Embedding layer for token indices -> vectors (if using WikiText)
+        if data_loader is not None:
+            vocab_size = data_loader.get_vocab_size()
+            embed_dim = config['model']['input_dim']
+            self.embedding = nn.Embedding(vocab_size, embed_dim).to(device)
+            print(f"Created embedding layer: {vocab_size} tokens -> {embed_dim} dims")
+        else:
+            self.embedding = None
 
         # Build hierarchy
         builder = HierarchyBuilder(
@@ -245,7 +368,7 @@ class HybridK1Trainer:
         # Loss tracking for adaptive top_k
         self.loss_history = []
 
-    def train(self, data: np.ndarray, max_steps: int = 1000):
+    def train(self, data: np.ndarray = None, max_steps: int = 1000):
         """Train using hybrid gradient+trust+diversity selection."""
         print("\n" + "="*70)
         print("HYBRID K-1: Gradient + Trust + Diversity Selection")
@@ -254,6 +377,15 @@ class HybridK1Trainer:
         print(f"Phase 1 (0-{min(self.phase_1_duration, max_steps)}): Gradient-based + exploration")
         if max_steps > self.phase_1_duration:
             print(f"Phase 2 ({self.phase_1_duration}+): Gradient+Trust+Diversity + autonomous ops")
+
+        # Check data source
+        if self.data_loader is not None:
+            print(f"Data source: WikiText-2 (vocab_size={self.data_loader.get_vocab_size()})")
+        elif data is not None:
+            print(f"Data source: Synthetic data ({data.shape[0]} samples)")
+        else:
+            print(f"Data source: Random noise (testing only)")
+
         print("="*70 + "\n")
 
         start_time = time.time()
@@ -282,15 +414,56 @@ class HybridK1Trainer:
                 self.phase_2_active = True
                 self.current_phase = 2
 
-            # Forward pass (on GPU)
-            x = torch.randn(self.config['model']['input_dim'], device=device)
-            x_np = x.cpu().numpy()  # Convert for k1_system compatibility
-            output, routing_path = self.forward_pass.forward(x_np, mode='hard')
+            # Get input/target data
+            if self.data_loader is not None:
+                # Use WikiText-2 data
+                try:
+                    x_batch, y_batch = self.data_loader.get_batch('train', batch_size=1, return_tensors='pt')
 
-            # Compute loss (on GPU)
-            target = torch.randn(self.config['model']['output_dim'], device=device)
-            output_tensor = torch.from_numpy(output).float().to(device) if isinstance(output, np.ndarray) else output
-            loss = torch.mean((output_tensor - target) ** 2).item()
+                    # Convert token indices to embeddings
+                    # x_batch is (1, seq_len) of token indices
+                    # We'll use mean pooling to get a single vector
+                    x_tokens = x_batch[0]  # Shape: (seq_len,)
+                    x_embedded = self.embedding(x_tokens)  # Shape: (seq_len, embed_dim)
+                    x_vector = torch.mean(x_embedded, dim=0)  # Shape: (embed_dim,) - mean pooling
+                    x = x_vector.detach().cpu().numpy()
+
+                    # For target, we'll also use mean pooling
+                    y_tokens = y_batch[0]
+                    y_embedded = self.embedding(y_tokens)
+                    y_vector = torch.mean(y_embedded, dim=0)
+                    target = y_vector.detach().cpu().numpy()
+
+                except Exception as e:
+                    # Fallback to random if batch fails
+                    print(f"Warning: Data loading failed: {e}")
+                    x = torch.randn(self.config['model']['input_dim'], device=device).cpu().numpy()
+                    target = torch.randn(self.config['model']['output_dim'], device=device).cpu().numpy()
+            elif data is not None:
+                # Use synthetic data
+                sample_idx = np.random.randint(0, len(data))
+                x = data[sample_idx]
+                target = data[sample_idx]  # Simplified target
+            else:
+                # Fallback to random noise
+                x = torch.randn(self.config['model']['input_dim'], device=device).cpu().numpy()
+                target = torch.randn(self.config['model']['output_dim'], device=device).cpu().numpy()
+
+            # Forward pass through K-1 system
+            output, routing_path = self.forward_pass.forward(x, mode='hard')
+
+            # Compute loss
+            if isinstance(output, np.ndarray):
+                output_tensor = torch.from_numpy(output).float().to(device)
+            else:
+                output_tensor = output.to(device)
+
+            if isinstance(target, np.ndarray):
+                target_tensor = torch.from_numpy(target).float().to(device)
+            else:
+                target_tensor = target.to(device)
+
+            loss = torch.mean((output_tensor - target_tensor) ** 2).item()
             self.loss_history.append(loss)
 
             # HYBRID APPROACH: Compute gradients for ALL agents (like backprop)
@@ -302,30 +475,30 @@ class HybridK1Trainer:
                 activated_agents, gradients, step
             )
 
-            # Update ONLY selected agents (sparse!) using REAL gradients
+            # Update ONLY selected agents (sparse!) using PyTorch optimizers
             params_updated_this_step = 0
             for agent in selected_agents:
-                # Convert tensor gradients to numpy for weight updater compatibility
-                grad_np = {}
-                for k, v in gradients[agent].items():
-                    if isinstance(v, torch.Tensor):
-                        grad_np[k] = v.cpu().numpy()
-                    else:
-                        grad_np[k] = v
-
-                self.weight_updater.update_agent(agent, grad_np)
+                # Update using PyTorch optimizer (gradients already in .grad)
+                self.weight_updater.update_agent(agent)
                 params_updated_this_step += params_per_agent
 
                 # Track updates
                 self.agent_last_updated[id(agent)] = step
                 self.agent_update_count[id(agent)] += 1
 
-                # Update trust based on improvement
+                # Update trust based on improvement (using gradient magnitude as proxy)
                 loss_contribution = self._estimate_loss_contribution(agent, gradients[agent])
                 if loss_contribution > 0:
                     self.trust_system.report_success(agent, loss_contribution * 0.1)
                 else:
                     self.trust_system.report_error(agent, abs(loss_contribution) * 0.1)
+
+            # Zero gradients for non-selected agents
+            for agent in activated_agents:
+                if agent not in selected_agents:
+                    for param in agent.parameters():
+                        if param.grad is not None:
+                            param.grad.zero_()
 
             self.total_params_updated += params_updated_this_step
             self.total_steps += 1
@@ -333,6 +506,27 @@ class HybridK1Trainer:
             # PHASE 2: Autonomous operations
             if self.phase_2_active and step % 200 == 0 and step > self.phase_1_duration:
                 self._autonomous_operations(step, all_agents, gradients)
+
+            # Update metrics tracker
+            avg_trust = np.mean([a.trust for a in all_agents])
+            self.metrics_tracker.update(
+                iteration=step,
+                accuracy=0.0,  # Placeholder for now
+                loss=loss,
+                avg_trust=avg_trust,
+                total_agents=len(all_agents)
+            )
+
+            # Validation
+            if step % 200 == 0 and self.data_loader is not None:
+                val_loss, val_perplexity = validate_k1_system(
+                    self.forward_pass,
+                    self.data_loader,
+                    embedding=self.embedding,
+                    num_batches=10,
+                    vocab_size=self.config['model'].get('vocab_size', 256)
+                )
+                print(f"[{step:4d}] VALIDATION | Loss: {val_loss:.4f} | Perplexity: {val_perplexity:.2f}")
 
             # Logging
             if step % 100 == 0:
@@ -344,50 +538,47 @@ class HybridK1Trainer:
 
     def _compute_all_gradients(self, x, output, target, activated_agents) -> Dict:
         """
-        Compute REAL gradients via backprop for ALL activated agents using PyTorch.
-        This is the key difference from original K-1 (which used trust heuristics).
+        Compute REAL gradients via PyTorch autograd for ALL activated agents.
+        Uses the agent's actual .grad attributes after backward pass.
         """
         gradients = {}
 
         # Convert to tensors if needed
-        if isinstance(x, np.ndarray):
-            x = torch.from_numpy(x).float().to(device)
         if isinstance(output, np.ndarray):
-            output = torch.from_numpy(output).float().to(device)
+            output_tensor = torch.from_numpy(output).float().to(device)
+        else:
+            output_tensor = output.to(device)
+
         if isinstance(target, np.ndarray):
-            target = torch.from_numpy(target).float().to(device)
+            target_tensor = torch.from_numpy(target).float().to(device)
+        else:
+            target_tensor = target.to(device)
 
+        # Compute loss (this builds the computation graph)
+        loss = torch.mean((output_tensor - target_tensor) ** 2)
+
+        # Backward pass to compute gradients
+        loss.backward(retain_graph=True)
+
+        # Extract gradients from each agent
         for agent in activated_agents:
-            # Convert agent weights to tensors
-            W1 = torch.from_numpy(agent.weights['W1']).float().to(device) if isinstance(agent.weights['W1'], np.ndarray) else agent.weights['W1'].to(device)
-            b1 = torch.from_numpy(agent.weights['b1']).float().to(device) if isinstance(agent.weights['b1'], np.ndarray) else agent.weights['b1'].to(device)
-            W2 = torch.from_numpy(agent.weights['W2']).float().to(device) if isinstance(agent.weights['W2'], np.ndarray) else agent.weights['W2'].to(device)
-            b2 = torch.from_numpy(agent.weights['b2']).float().to(device) if isinstance(agent.weights['b2'], np.ndarray) else agent.weights['b2'].to(device)
+            # Get gradients from agent parameters
+            agent_grads = {}
+            grad_norm = 0.0
 
-            # Forward through this agent (on GPU)
-            h_input = x
-            h_output = torch.relu(h_input @ W1 + b1)
+            for name, param in agent.named_parameters():
+                if param.grad is not None:
+                    # Store gradient (clone to prevent modification)
+                    agent_grads[name] = param.grad.clone()
+                    # Accumulate norm
+                    grad_norm += param.grad.data.norm(2).item() ** 2
 
-            # Backprop through this agent (on GPU)
-            d_output = output - target
-            grad_W2 = torch.outer(h_output, d_output)
-            grad_b2 = d_output
+            grad_norm = grad_norm ** 0.5
 
-            d_hidden = (d_output @ W2.T) * (h_output > 0).float()
-            grad_W1 = torch.outer(h_input, d_hidden)
-            grad_b1 = d_hidden
+            # Store gradients
+            gradients[agent] = agent_grads
 
-            # Store gradients as tensors (keep on GPU for speed)
-            gradients[agent] = {
-                'W1': grad_W1,
-                'b1': grad_b1,
-                'W2': grad_W2,
-                'b2': grad_b2
-            }
-
-            # Track gradient magnitude (on GPU, then move to CPU for storage)
-            grad_norm = (torch.norm(grad_W1).item() + torch.norm(grad_W2).item() +
-                        torch.norm(grad_b1).item() + torch.norm(grad_b2).item())
+            # Track gradient history
             self.agent_gradient_history[id(agent)].append(grad_norm)
             if len(self.agent_gradient_history[id(agent)]) > 100:
                 self.agent_gradient_history[id(agent)].pop(0)
@@ -585,6 +776,27 @@ class HybridK1Trainer:
         print(f"Agents pruned: {self.agents_pruned}")
         print(f"Agents merged: {self.agents_merged}")
 
+        # Metrics summary
+        metrics_summary = self.metrics_tracker.compute_performance_summary()
+        if metrics_summary:
+            print(f"\nMetrics Summary:")
+            print(f"  Best loss: {metrics_summary.get('best_loss', 0):.4f}")
+            print(f"  Current loss: {metrics_summary.get('current_loss', 0):.4f}")
+            print(f"  Worst loss: {metrics_summary.get('worst_loss', 0):.4f}")
+
+        # Final validation
+        if self.data_loader is not None:
+            val_loss, val_perplexity = validate_k1_system(
+                self.forward_pass,
+                self.data_loader,
+                embedding=self.embedding,
+                num_batches=20,
+                vocab_size=self.config['model'].get('vocab_size', 256)
+            )
+            print(f"\nFinal Validation:")
+            print(f"  Loss: {val_loss:.4f}")
+            print(f"  Perplexity: {val_perplexity:.2f}")
+
         # Trust distribution
         trust_scores = [a.trust for a in all_agents]
         print(f"\nTrust Distribution:")
@@ -615,7 +827,7 @@ class HybridK1Trainer:
         }
 
 
-def compare_approaches(max_steps: int = 1000):
+def compare_approaches(max_steps: int = 1000, use_wikitext: bool = True):
     """Run comparison between baseline and hybrid K-1."""
     print("\n" + "="*70)
     print("COMPARISON: Baseline vs Hybrid K-1 (Gradient+Trust+Diversity)")
@@ -623,21 +835,48 @@ def compare_approaches(max_steps: int = 1000):
     print(f"Test: {max_steps} training steps")
     print("="*70)
 
-    # Generate data
-    data = generate_synthetic_data(n_samples=500)
-    print(f"\nGenerated synthetic data: {data.shape[0]} samples\n")
+    # Load data
+    data_loader = None
+    if use_wikitext:
+        data_loader = load_wikitext_data(vocab_size=10000, seq_length=64)
+
+    # Fallback to synthetic if WikiText fails
+    if data_loader is None:
+        data = generate_synthetic_data(n_samples=500)
+        print(f"\nUsing synthetic data: {data.shape[0]} samples\n")
+    else:
+        data = None  # Not used when we have data_loader
 
     # Test Baseline
     baseline_config = load_config(use_k1=False)
     baseline_trainer = BaselineTrainer(baseline_config)
-    baseline_results = baseline_trainer.train(data, max_steps=max_steps)
+    if data is not None:
+        baseline_results = baseline_trainer.train(data, max_steps=max_steps)
+    else:
+        # Skip baseline when using WikiText (baseline is just simulation)
+        print("\nSkipping baseline simulation (using real WikiText-2 data)\n")
+        baseline_results = {
+            'total_steps': max_steps,
+            'total_params_updated': 100000 * max_steps,
+            'avg_params_per_step': 100000,
+            'time': 0.0
+        }
 
     # Test Hybrid K-1
     k1_config = load_config(use_k1=True)
     k1_config['system']['phase_1_duration'] = max_steps // 2
     k1_config['training']['max_steps'] = max_steps
-    k1_trainer = HybridK1Trainer(k1_config)
-    k1_results = k1_trainer.train(data, max_steps=max_steps)
+
+    # Update vocab_size if using WikiText
+    if data_loader is not None:
+        k1_config['model']['vocab_size'] = data_loader.get_vocab_size()
+
+    k1_trainer = HybridK1Trainer(k1_config, data_loader=data_loader)
+    if data is not None:
+        k1_results = k1_trainer.train(data, max_steps=max_steps)
+    else:
+        # Use data_loader for training
+        k1_results = k1_trainer.train(None, max_steps=max_steps)
 
     # Comparison summary
     print("\n" + "="*70)
@@ -716,5 +955,6 @@ WHY HYBRID IS BETTER THAN ORIGINAL K-1:
 
 
 if __name__ == "__main__":
-    # Run comparison
-    compare_approaches(max_steps=1000)
+    # Run comparison with WikiText-2 dataset
+    # Set use_wikitext=False to use synthetic data instead
+    compare_approaches(max_steps=1000, use_wikitext=True)

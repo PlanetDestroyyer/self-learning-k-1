@@ -1,17 +1,21 @@
 """
-Weight update system for the Self-Learning K-1 System.
+Weight update system for the Self-Learning K-1 System (PyTorch version).
 
-Implements gradient computation and weight updates for selected agents.
+Uses PyTorch optimizers and autograd instead of manual gradient computation.
 """
 
-import numpy as np
-from typing import List, Dict
+import torch
+import torch.nn as nn
+from typing import List, Dict, Optional
 from ..core.agent import Agent
 
 
 class WeightUpdater:
     """
-    Manages weight updates for agents using computed gradients.
+    Manages weight updates for agents using PyTorch optimizers.
+
+    This replaces manual gradient computation with PyTorch's autograd.
+    Each agent gets its own optimizer to maintain separate momentum states.
     """
 
     def __init__(self, learning_rate: float = 0.001):
@@ -24,120 +28,102 @@ class WeightUpdater:
         self.learning_rate = learning_rate
         self.update_count = 0
 
-    def compute_gradient(self,
-                        agent: Agent,
-                        x: np.ndarray,
-                        target: np.ndarray,
-                        output: np.ndarray) -> Dict[str, np.ndarray]:
-        """
-        Compute gradient for an agent's weights.
+        # Store one SGD optimizer per agent
+        self.optimizers: Dict[str, torch.optim.Optimizer] = {}
 
-        Uses simple backpropagation through the agent's local network.
+    def get_optimizer(self, agent: Agent) -> torch.optim.Optimizer:
+        """
+        Get or create optimizer for an agent.
 
         Args:
-            agent: Agent to compute gradient for
-            x: Input to agent
-            target: Target output
-            output: Actual output from agent
+            agent: Agent to get optimizer for
 
         Returns:
-            Dictionary of gradients for each weight
+            PyTorch optimizer for this agent
         """
-        gradients = {}
+        if agent.id not in self.optimizers:
+            self.optimizers[agent.id] = torch.optim.SGD(
+                agent.parameters(),
+                lr=self.learning_rate
+            )
+        return self.optimizers[agent.id]
 
-        # Forward pass to get intermediate activations
-        h = np.maximum(0, x @ agent.weights['W1'] + agent.weights['b1'])  # ReLU
-        pred = h @ agent.weights['W2'] + agent.weights['b2']
-
-        # Output layer gradient
-        d_output = pred - target  # Assuming MSE loss
-
-        # Gradient for W2 and b2
-        gradients['W2'] = np.outer(h, d_output)
-        gradients['b2'] = d_output
-
-        # Backpropagate to hidden layer
-        d_h = d_output @ agent.weights['W2'].T
-        d_h[h <= 0] = 0  # ReLU gradient
-
-        # Gradient for W1 and b1
-        gradients['W1'] = np.outer(x, d_h)
-        gradients['b1'] = d_h
-
-        return gradients
-
-    def update_agent(self,
-                    agent: Agent,
-                    gradient: Dict[str, np.ndarray]):
+    def update_agent(self, agent: Agent):
         """
-        Update an agent's weights using gradient.
+        Update an agent's weights using PyTorch optimizer.
+
+        NOTE: Gradients must be computed via loss.backward() BEFORE calling this.
 
         Args:
             agent: Agent to update
-            gradient: Gradient dictionary
         """
-        agent.update_weights(gradient, self.learning_rate)
+        optimizer = self.get_optimizer(agent)
+
+        # Clip gradients to prevent explosion
+        torch.nn.utils.clip_grad_norm_(agent.parameters(), max_norm=1.0)
+
+        # Update weights
+        optimizer.step()
+
+        # Zero gradients for next iteration
+        optimizer.zero_grad()
+
         self.update_count += 1
 
-    def update_agents(self,
-                     agents: List[Agent],
-                     gradients: List[Dict[str, np.ndarray]]):
+    def update_agents(self, agents: List[Agent]):
         """
         Update multiple agents with their gradients.
 
         Args:
             agents: List of agents to update
-            gradients: List of gradient dictionaries
         """
-        for agent, gradient in zip(agents, gradients):
-            self.update_agent(agent, gradient)
+        for agent in agents:
+            self.update_agent(agent)
 
     def update_learning_rate(self, new_rate: float):
         """
-        Update learning rate.
+        Update learning rate for all optimizers.
 
         Args:
             new_rate: New learning rate
         """
         self.learning_rate = max(0.0, new_rate)
 
-    def compute_gradient_norm(self, gradient: Dict[str, np.ndarray]) -> float:
+        # Update all existing optimizers
+        for optimizer in self.optimizers.values():
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = self.learning_rate
+
+    def get_gradient_norm(self, agent: Agent) -> float:
         """
-        Compute L2 norm of gradient.
+        Compute L2 norm of agent's gradients.
 
         Args:
-            gradient: Gradient dictionary
+            agent: Agent to compute gradient norm for
 
         Returns:
             Gradient norm
         """
         total_norm = 0.0
-        for key, grad in gradient.items():
-            total_norm += np.sum(grad ** 2)
-        return np.sqrt(total_norm)
+        for param in agent.parameters():
+            if param.grad is not None:
+                total_norm += param.grad.data.norm(2).item() ** 2
+        return total_norm ** 0.5
 
-    def clip_gradient(self,
-                     gradient: Dict[str, np.ndarray],
-                     max_norm: float = 5.0) -> Dict[str, np.ndarray]:
+    def zero_grad_all(self):
+        """Zero gradients for all agents."""
+        for optimizer in self.optimizers.values():
+            optimizer.zero_grad()
+
+    def remove_agent_optimizer(self, agent_id: str):
         """
-        Clip gradient by norm to prevent exploding gradients.
+        Remove optimizer for a deleted agent (for pruning).
 
         Args:
-            gradient: Gradient dictionary
-            max_norm: Maximum allowed norm
-
-        Returns:
-            Clipped gradient
+            agent_id: Agent ID to remove
         """
-        grad_norm = self.compute_gradient_norm(gradient)
-
-        if grad_norm > max_norm:
-            # Scale down gradient
-            scale = max_norm / grad_norm
-            clipped = {key: grad * scale for key, grad in gradient.items()}
-            return clipped
-        else:
-            return gradient
+        if agent_id in self.optimizers:
+            del self.optimizers[agent_id]
 
     def get_update_statistics(self) -> Dict:
         """
@@ -148,13 +134,16 @@ class WeightUpdater:
         """
         return {
             'total_updates': self.update_count,
-            'current_learning_rate': self.learning_rate
+            'current_learning_rate': self.learning_rate,
+            'num_optimizers': len(self.optimizers)
         }
 
 
 class AdaptiveWeightUpdater(WeightUpdater):
     """
-    Weight updater with adaptive learning rate (Adam-like).
+    Weight updater with adaptive learning rate (Adam optimizer).
+
+    Uses PyTorch's Adam optimizer instead of manual Adam implementation.
     """
 
     def __init__(self,
@@ -177,58 +166,34 @@ class AdaptiveWeightUpdater(WeightUpdater):
         self.beta2 = beta2
         self.epsilon = epsilon
 
-        # Momentum terms for each agent
-        self.m: Dict[str, Dict[str, np.ndarray]] = {}  # First moment
-        self.v: Dict[str, Dict[str, np.ndarray]] = {}  # Second moment
-        self.t: Dict[str, int] = {}  # Time step for each agent
+        # Adam optimizers for each agent
+        self.optimizers: Dict[str, torch.optim.Adam] = {}
 
-    def update_agent(self,
-                    agent: Agent,
-                    gradient: Dict[str, np.ndarray]):
+    def get_optimizer(self, agent: Agent) -> torch.optim.Adam:
         """
-        Update agent weights using adaptive learning rate.
+        Get or create Adam optimizer for an agent.
 
         Args:
-            agent: Agent to update
-            gradient: Gradient dictionary
+            agent: Agent to get optimizer for
+
+        Returns:
+            PyTorch Adam optimizer for this agent
         """
-        agent_id = agent.id
-
-        # Initialize momentum terms if needed
-        if agent_id not in self.m:
-            self.m[agent_id] = {key: np.zeros_like(grad) for key, grad in gradient.items()}
-            self.v[agent_id] = {key: np.zeros_like(grad) for key, grad in gradient.items()}
-            self.t[agent_id] = 0
-
-        # Increment time step
-        self.t[agent_id] += 1
-        t = self.t[agent_id]
-
-        # Update biased first and second moments
-        for key in gradient:
-            self.m[agent_id][key] = self.beta1 * self.m[agent_id][key] + (1 - self.beta1) * gradient[key]
-            self.v[agent_id][key] = self.beta2 * self.v[agent_id][key] + (1 - self.beta2) * (gradient[key] ** 2)
-
-            # Bias correction
-            m_hat = self.m[agent_id][key] / (1 - self.beta1 ** t)
-            v_hat = self.v[agent_id][key] / (1 - self.beta2 ** t)
-
-            # Update weights
-            update = self.learning_rate * m_hat / (np.sqrt(v_hat) + self.epsilon)
-            agent.weights[key] -= update
-
-        self.update_count += 1
+        if agent.id not in self.optimizers:
+            self.optimizers[agent.id] = torch.optim.Adam(
+                agent.parameters(),
+                lr=self.learning_rate,
+                betas=(self.beta1, self.beta2),
+                eps=self.epsilon
+            )
+        return self.optimizers[agent.id]
 
     def reset_agent_state(self, agent_id: str):
         """
-        Reset momentum state for an agent.
+        Reset optimizer state for an agent.
 
         Args:
             agent_id: Agent ID
         """
-        if agent_id in self.m:
-            del self.m[agent_id]
-        if agent_id in self.v:
-            del self.v[agent_id]
-        if agent_id in self.t:
-            del self.t[agent_id]
+        if agent_id in self.optimizers:
+            del self.optimizers[agent_id]

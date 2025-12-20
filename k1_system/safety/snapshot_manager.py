@@ -65,7 +65,7 @@ class StructureSnapshot:
         for agent in hierarchy.get_all_agents():
             parent_child_map[agent.id] = {
                 'parent_id': agent.parent.id if agent.parent else None,
-                'children_ids': [child.id for child in agent.children]
+                'children_ids': [child.id for child in agent.child_agents]
             }
 
         return parent_child_map

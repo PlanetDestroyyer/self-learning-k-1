@@ -117,7 +117,7 @@ class HierarchicalRouter:
             current_agent.record_activation(activation, 0)  # Iteration will be updated later
 
             # Check if we should continue routing
-            if len(current_agent.children) == 0:
+            if len(current_agent.child_agents) == 0:
                 # Leaf node, stop
                 confidence = 1.0
                 path.add_step(current_agent, confidence, activation)
@@ -127,8 +127,14 @@ class HierarchicalRouter:
             # Compute routing scores for children
             routing_scores = current_agent.route(output)
 
+            # Convert to numpy if it's a tensor
+            if hasattr(routing_scores, 'detach'):
+                routing_scores_np = routing_scores.detach().cpu().numpy()
+            else:
+                routing_scores_np = routing_scores
+
             # Check if confident enough to route
-            max_score = np.max(routing_scores)
+            max_score = np.max(routing_scores_np)
             confidence = max_score
 
             if confidence < self.confidence_threshold:
@@ -140,16 +146,16 @@ class HierarchicalRouter:
             # Select next agent (with exploration)
             if np.random.random() < self.exploration_rate:
                 # Explore: random child
-                next_idx = np.random.randint(len(routing_scores))
+                next_idx = np.random.randint(len(routing_scores_np))
             else:
                 # Exploit: best child
-                next_idx = np.argmax(routing_scores)
+                next_idx = np.argmax(routing_scores_np)
 
             # Add current step to path
             path.add_step(current_agent, confidence, activation)
 
             # Move to next agent
-            children_list = list(current_agent.children)
+            children_list = list(current_agent.child_agents)
             current_agent = children_list[next_idx]
             current_input = output
             depth += 1
@@ -189,7 +195,7 @@ class HierarchicalRouter:
                 all_activated.append((agent, weight, depth))
 
                 # Check for children
-                if len(agent.children) == 0:
+                if len(agent.child_agents) == 0:
                     # Leaf node
                     path.add_step(agent, 1.0, weight)
                     if path.final_output is None:
@@ -209,7 +215,7 @@ class HierarchicalRouter:
 
                 # Add top-k to next level
                 for idx in top_indices:
-                    child = list(agent.children)[idx]
+                    child = list(agent.child_agents)[idx]
                     child_weight = weight * routing_scores[idx]
 
                     if child_weight > 0.01:  # Only keep significant paths

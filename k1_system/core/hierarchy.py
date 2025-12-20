@@ -78,7 +78,7 @@ class Hierarchy:
             agent: Agent to remove
         """
         # First remove all children
-        children_copy = list(agent.children)
+        children_copy = list(agent.child_agents)
         for child in children_copy:
             self.remove_agent(child)
 
@@ -162,7 +162,7 @@ class Hierarchy:
             List of all descendants
         """
         descendants = []
-        queue = deque(list(agent.children))
+        queue = deque(list(agent.child_agents))
 
         while queue:
             current = queue.popleft()
@@ -287,7 +287,7 @@ class Hierarchy:
             new_agent: New agent
         """
         # Transfer children
-        children_copy = list(old_agent.children)
+        children_copy = list(old_agent.child_agents)
         for child in children_copy:
             old_agent.remove_child(child)
             new_agent.add_child(child)
@@ -309,7 +309,7 @@ class Hierarchy:
     def get_leaves(self) -> List[Agent]:
         """Get all leaf agents (no children)."""
         return [agent for agent in self._all_agents.values()
-                if len(agent.children) == 0]
+                if len(agent.child_agents) == 0]
 
     def get_active_agents(self, threshold: float = 0.01) -> List[Agent]:
         """
@@ -383,10 +383,10 @@ class Hierarchy:
         # Print current agent
         connector = "└── " if is_last else "├── "
         print(f"{prefix}{connector}{agent.specialty} (trust={agent.trust:.3f}, "
-              f"children={len(agent.children)})")
+              f"child_agents={len(agent.child_agents)})")
 
         # Print children
-        children = list(agent.children)
+        children = list(agent.child_agents)
         for i, child in enumerate(children):
             extension = "    " if is_last else "│   "
             self.print_tree(child, prefix + extension, i == len(children) - 1)
@@ -426,7 +426,7 @@ class Hierarchy:
                 return
             path.add(agent.id)
             visited.add(agent.id)
-            for child in agent.children:
+            for child in agent.child_agents:
                 check_cycle(child, path.copy())
 
         check_cycle(self.root, set())

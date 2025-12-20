@@ -5,7 +5,8 @@ Implements hierarchical forward propagation through the agent tree.
 """
 
 import numpy as np
-from typing import Tuple
+import torch
+from typing import Tuple, Union
 from ..core.hierarchy import Hierarchy
 from ..core.routing import HierarchicalRouter, RoutingPath
 from ..core.trust_system import TrustCache
@@ -71,29 +72,67 @@ class ForwardPass:
         return output, path
 
     def batch_forward(self,
-                     X: np.ndarray,
-                     mode: str = 'hard') -> Tuple[np.ndarray, list]:
+                     X: Union[np.ndarray, torch.Tensor],
+                     mode: str = 'hard',
+                     vectorized: bool = True) -> Tuple[Union[np.ndarray, torch.Tensor], list]:
         """
-        Perform forward pass on a batch of inputs.
+        Perform forward pass on a batch of inputs (vectorized).
 
         Args:
             X: Batch of input vectors (batch_size x input_dim)
             mode: Routing mode
+            vectorized: If True, uses vectorized batch processing (faster but all samples follow same path)
 
         Returns:
             (outputs, paths) tuple
         """
+        # Convert to tensor if needed
+        is_numpy = isinstance(X, np.ndarray)
+        if is_numpy:
+            X = torch.from_numpy(X).float()
+
         batch_size = X.shape[0]
-        outputs = []
-        paths = []
 
-        for i in range(batch_size):
-            output, path = self.forward(X[i], mode=mode)
-            outputs.append(output)
-            paths.append(path)
+        if vectorized and batch_size > 1:
+            # Vectorized version: route first sample, apply to all
+            # Trade-off: All samples follow same agent path, but much faster
 
-        # Stack outputs
-        outputs = np.array(outputs)
+            # Get path from first sample
+            first_sample = X[0].cpu().numpy() if isinstance(X, torch.Tensor) else X[0]
+            _, sample_path = self.forward(first_sample, mode=mode)
+            agents_in_path = sample_path.get_activated_agents()
+
+            # Apply same path to entire batch (vectorized)
+            current_output = X
+            for agent in agents_in_path:
+                current_output = agent.forward(current_output)
+                # Update agent usage
+                agent.last_used = self.current_iteration
+
+            # Create paths (all use same structure)
+            paths = [sample_path for _ in range(batch_size)]
+            outputs = current_output
+
+        else:
+            # Sequential version: route each sample independently
+            outputs = []
+            paths = []
+
+            for i in range(batch_size):
+                x_i = X[i].cpu().numpy() if isinstance(X, torch.Tensor) else X[i]
+                output, path = self.forward(x_i, mode=mode)
+                outputs.append(output)
+                paths.append(path)
+
+            # Stack outputs
+            if isinstance(outputs[0], torch.Tensor):
+                outputs = torch.stack(outputs)
+            else:
+                outputs = np.array(outputs)
+
+        # Convert back to numpy if input was numpy
+        if is_numpy and isinstance(outputs, torch.Tensor):
+            outputs = outputs.cpu().detach().numpy()
 
         return outputs, paths
 

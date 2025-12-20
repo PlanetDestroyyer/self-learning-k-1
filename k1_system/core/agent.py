@@ -6,19 +6,24 @@ containing neural network weights, trust scores, and structural information.
 """
 
 import numpy as np
-from typing import Optional, List, Set
+import torch
+import torch.nn as nn
+from typing import Optional, List, Set, Union
 from collections import deque
 
 
-class Agent:
+class Agent(nn.Module):
     """
     Represents a single agent (node) in the hierarchical knowledge system.
+
+    Now implemented as PyTorch nn.Module for GPU acceleration and autograd.
 
     Attributes:
         id: Unique identifier for the agent
         agent_type: Type of agent ('master', 'manager', 'agent', 'sub_agent')
         specialty: Domain or specialty this agent handles
-        weights: Neural network weights
+        layer1, layer2: PyTorch Linear layers (replaces weight dict)
+        routing: PyTorch Parameter for routing weights
         trust: Trust score (0.0 to 1.0)
         parent: Reference to parent agent
         children: Set of child agents
@@ -41,7 +46,7 @@ class Agent:
                  initial_trust: float = 0.3,
                  creation_iteration: int = 0):
         """
-        Initialize an agent.
+        Initialize an agent as PyTorch nn.Module.
 
         Args:
             agent_id: Unique ID (auto-generated if None)
@@ -53,6 +58,8 @@ class Agent:
             initial_trust: Starting trust score
             creation_iteration: Iteration when created
         """
+        super().__init__()
+
         if agent_id is None:
             agent_id = f"{agent_type}_{Agent._id_counter}"
             Agent._id_counter += 1
@@ -61,22 +68,28 @@ class Agent:
         self.agent_type = agent_type
         self.specialty = specialty
 
-        # Neural network weights (simple 2-layer network)
+        # Neural network dimensions
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
 
-        # Initialize weights with Xavier initialization
-        self.weights = {
-            'W1': np.random.randn(input_dim, hidden_dim) * np.sqrt(2.0 / input_dim),
-            'b1': np.zeros(hidden_dim),
-            'W2': np.random.randn(hidden_dim, output_dim) * np.sqrt(2.0 / hidden_dim),
-            'b2': np.zeros(output_dim),
-            # Routing weights (for deciding which child to activate)
-            'routing': np.random.randn(output_dim, 10) * 0.01  # 10 potential children max initially
-        }
+        # PyTorch layers (replaces weight dict)
+        self.layer1 = nn.Linear(input_dim, hidden_dim)
+        self.layer2 = nn.Linear(hidden_dim, output_dim)
 
-        # Trust and performance tracking
+        # Routing parameter (for deciding which child to activate)
+        self.routing = nn.Parameter(torch.randn(output_dim, 10) * 0.01)
+
+        # Initialize with Xavier/He initialization
+        nn.init.xavier_uniform_(self.layer1.weight)
+        nn.init.zeros_(self.layer1.bias)
+        nn.init.xavier_uniform_(self.layer2.weight)
+        nn.init.zeros_(self.layer2.bias)
+
+        # Device handling
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Trust and performance tracking (keep as Python/NumPy for simplicity)
         self.trust = initial_trust
         self.creation_iteration = creation_iteration
         self.last_used = creation_iteration
@@ -89,9 +102,9 @@ class Agent:
         self.error_history = deque(maxlen=1000)  # Last 1000 errors
         self.activation_level = 0.0  # Current activation level
 
-        # Hierarchical structure
+        # Hierarchical structure (renamed from 'children' to avoid nn.Module conflict)
         self.parent: Optional[Agent] = None
-        self.children: Set[Agent] = set()
+        self.child_agents: Set[Agent] = set()  # Renamed to avoid PyTorch nn.Module.children() conflict
 
         # Performance metrics
         self.success_count = 0
@@ -100,25 +113,35 @@ class Agent:
         self.protected = False  # Protection from deletion
         self.protected_until = 0  # Iteration until which agent is protected
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
+    def forward(self, x: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
         """
         Forward pass through this agent's neural network.
 
         Args:
-            x: Input vector
+            x: Input vector or batch (torch.Tensor or np.ndarray)
 
         Returns:
-            Output vector
+            Output tensor
         """
-        # Layer 1
-        h = np.maximum(0, x @ self.weights['W1'] + self.weights['b1'])  # ReLU activation
+        # Convert numpy to tensor if needed
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).float().to(self.device)
+        elif not isinstance(x, torch.Tensor):
+            raise TypeError(f"Input must be torch.Tensor or np.ndarray, got {type(x)}")
 
-        # Layer 2
-        output = h @ self.weights['W2'] + self.weights['b2']
+        # Ensure on correct device
+        if x.device != self.device:
+            x = x.to(self.device)
+
+        # Layer 1 with ReLU activation
+        h = torch.relu(self.layer1(x))
+
+        # Layer 2 (linear output)
+        output = self.layer2(h)
 
         return output
 
-    def route(self, x: np.ndarray) -> np.ndarray:
+    def route(self, x: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
         """
         Compute routing scores for children.
 
@@ -126,31 +149,24 @@ class Agent:
             x: Input vector (typically output from forward pass)
 
         Returns:
-            Routing scores for each child
+            Routing probability distribution over children
         """
-        if len(self.children) == 0:
-            return np.array([])
+        if len(self.child_agents) == 0:
+            return torch.tensor([], device=self.device)
 
-        # Compute routing scores
-        routing_scores = x @ self.weights['routing'][:, :len(self.children)]
+        # Convert numpy to tensor if needed
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).float().to(self.device)
+        elif x.device != self.device:
+            x = x.to(self.device)
+
+        # Compute routing scores (use only as many routing weights as we have child_agents)
+        routing_scores = x @ self.routing[:, :len(self.child_agents)]
 
         # Apply softmax to get probabilities
-        exp_scores = np.exp(routing_scores - np.max(routing_scores))
-        routing_probs = exp_scores / np.sum(exp_scores)
+        routing_probs = torch.softmax(routing_scores, dim=-1)
 
         return routing_probs
-
-    def update_weights(self, gradient: dict, learning_rate: float):
-        """
-        Update agent's weights using gradients.
-
-        Args:
-            gradient: Dictionary of gradients for each weight
-            learning_rate: Learning rate for update
-        """
-        for key in self.weights:
-            if key in gradient:
-                self.weights[key] -= learning_rate * gradient[key]
 
     def record_activation(self, activation_level: float, iteration: int):
         """
@@ -181,27 +197,33 @@ class Agent:
         self.last_usage_reset = iteration
 
     def add_child(self, child: 'Agent'):
-        """Add a child agent."""
-        self.children.add(child)
+        """Add a child agent and expand routing parameter if needed."""
+        self.child_agents.add(child)
         child.parent = self
 
-        # Expand routing weights if needed
-        if len(self.children) > self.weights['routing'].shape[1]:
-            new_routing = np.random.randn(self.output_dim, len(self.children)) * 0.01
-            new_routing[:, :self.weights['routing'].shape[1]] = self.weights['routing']
-            self.weights['routing'] = new_routing
+        # Expand routing parameter if needed
+        if len(self.child_agents) > self.routing.shape[1]:
+            with torch.no_grad():
+                new_routing = torch.randn(
+                    self.output_dim, len(self.child_agents),
+                    device=self.device
+                ) * 0.01
+                # Copy existing routing weights
+                new_routing[:, :self.routing.shape[1]] = self.routing.data
+                # Replace parameter
+                self.routing = nn.Parameter(new_routing)
 
     def remove_child(self, child: 'Agent'):
         """Remove a child agent."""
-        if child in self.children:
-            self.children.remove(child)
+        if child in self.child_agents:
+            self.child_agents.remove(child)
             child.parent = None
 
     def is_only_agent_in_domain(self) -> bool:
         """Check if this is the only agent under its parent."""
         if self.parent is None:
             return True
-        return len(self.parent.children) <= 1
+        return len(self.parent.child_agents) <= 1
 
     def trust_increasing(self, window: int = 100) -> bool:
         """
@@ -272,7 +294,7 @@ class Agent:
 
     def __repr__(self) -> str:
         return (f"Agent(id={self.id}, type={self.agent_type}, specialty={self.specialty}, "
-                f"trust={self.trust:.3f}, children={len(self.children)})")
+                f"trust={self.trust:.3f}, child_agents={len(self.child_agents)})")
 
     def __hash__(self):
         return hash(self.id)

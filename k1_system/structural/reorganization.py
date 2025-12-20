@@ -252,7 +252,7 @@ class ReorganizationSystem:
         Returns:
             Tuple of (new_manager_1, new_manager_2)
         """
-        children = list(manager.children)
+        children = list(manager.child_agents)
 
         if len(children) < 6:  # Need enough children to split
             return None, None
@@ -325,7 +325,7 @@ class ReorganizationSystem:
 
         # Move all children to parent
         parent = manager.parent
-        for child in list(manager.children):
+        for child in list(manager.child_agents):
             manager.remove_child(child)
             parent.add_child(child)
 
@@ -383,7 +383,7 @@ class ReorganizationSystem:
         # Split busy managers
         managers = self.hierarchy.get_agents_by_type('manager')
         for manager in managers:
-            if manager.get_avg_activation() > 0.8 and len(manager.children) > 30:
+            if manager.get_avg_activation() > 0.8 and len(manager.child_agents) > 30:
                 m1, m2 = self.split_manager(manager, current_iteration)
                 if m1 and m2:
                     results['managers_split'] += 1
