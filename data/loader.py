@@ -148,7 +148,7 @@ class DataLoader:
             return datasets
 
     def _load_code_python(self) -> str:
-        """Load Python code dataset."""
+        """Load Python code dataset (codeparrot/github-code)."""
         data_dir = self.data_dir / 'code_python'
         file_path = data_dir / 'train.txt'
         
@@ -156,19 +156,25 @@ class DataLoader:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
                 
-        print("Downloading Python Code dataset...")
+        print("Downloading Python Code dataset (codeparrot/github-code)...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use bigcode/the-stack-smol which is accessible
-            dataset = datasets.load_dataset('bigcode/the-stack-smol', 'data/python', split='train', streaming=True, trust_remote_code=True)
+            # Use codeparrot/github-code with Python filter - verified working
+            dataset = datasets.load_dataset(
+                'codeparrot/github-code', 
+                streaming=True, 
+                split='train',
+                languages=['Python'],
+                trust_remote_code=True
+            )
             
-            print("Fetching 5,000 code examples...")
+            print("Fetching 5,000 Python code examples...")
             texts = []
             for i, item in enumerate(dataset):
                 if i >= 5000: break
-                content = item.get('content', '')
-                if len(content) > 100:  # Only meaningful code
-                    texts.append(content[:2000])  # Limit size
+                code = item.get('code', '')
+                if len(code) > 100:  # Only meaningful code
+                    texts.append(code[:2000])  # Limit size
             
             text = '\n\n'.join(texts)
             
