@@ -434,7 +434,7 @@ class HybridK1Trainer:
                     self.trust_system.report_error(agent, trust_scale * self.trust_penalty_ratio)
 
             # Zero gradients for non-selected agents
-            for agent in activated_agents:
+            for agent in self.all_agents:
                 if agent not in selected_agents:
                     for param in agent.parameters():
                         if param.grad is not None:
