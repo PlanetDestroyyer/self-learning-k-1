@@ -229,28 +229,38 @@ class HybridK1Trainer:
         }
     
     def _validate(self, num_batches=10):
-        """Validation with proper autoregressive loss."""
-        total_loss, total_tokens = 0.0, 0
+        """Validation with proper autoregressive loss - batched for GPU efficiency."""
+        losses = []
+        total_tokens = 0
         loss_fn = nn.CrossEntropyLoss(reduction='sum')
-        
+
         self.model.eval()
         with torch.no_grad():
             for _ in range(num_batches):
                 try:
-                    x_batch, y_batch = self.data_loader.get_batch('val', batch_size=8, return_tensors='pt')
-                    
-                    for i in range(x_batch.shape[0]):
-                        x_tokens = x_batch[i]
-                        y_tokens = y_batch[i]
-                        
-                        logits = self.model(x_tokens)
-                        loss = loss_fn(logits[:-1], y_tokens[1:])
-                        
-                        total_loss += loss.item()
-                        total_tokens += len(y_tokens) - 1
+                    x_batch, y_batch = self.data_loader.get_batch('val', batch_size=32, return_tensors='pt')
+
+                    # Process entire batch at once (GPU-optimized!)
+                    logits = self.model(x_batch)  # [batch, seq_len, vocab]
+
+                    # Compute loss for all sequences in batch
+                    loss = loss_fn(
+                        logits[:, :-1].reshape(-1, self.vocab_size),  # [batch*(seq-1), vocab]
+                        y_batch[:, 1:].reshape(-1)  # [batch*(seq-1)]
+                    )
+
+                    losses.append(loss)  # Keep as tensor
+                    total_tokens += y_batch[:, 1:].numel()
                 except:
                     continue
-        
+
         self.model.train()
-        avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
+
+        # Single GPU-CPU sync at the end
+        if losses:
+            total_loss = torch.stack(losses).sum().item()
+            avg_loss = total_loss / total_tokens
+        else:
+            avg_loss = float('inf')
+
         return avg_loss, np.exp(min(avg_loss, 100))
