@@ -68,23 +68,43 @@ class HybridK1Trainer:
             opt = torch.optim.SGD(group_params, lr=self.lr)
             self.optimizers.append(opt)
 
-        
         # Stats
         self.total_params = sum(p.numel() for group in self.param_groups for p in group)
         self.total_params_updated = 0
         self.total_steps = 0
         self.loss_history = []
-        self._loss_buffer = []  # Pre-initialize to avoid hasattr check every step
+        self._loss_buffer = []
         self.group_update_count = defaultdict(int)
         
         # Pre-calculate group parameter counts
         group_counts = [sum(p.numel() for p in group) for group in self.param_groups]
         self._group_param_counts = torch.tensor(group_counts, dtype=torch.float32, device=device)
 
+        # === IMPROVEMENT 2: EWC-style Importance Tracking ===
+        # Fisher Information approximation - tracks which params are important
+        self.importance = {}
+        for p in self.model.parameters():
+            self.importance[p] = torch.zeros_like(p, device=device)
+        self.ewc_lambda = config['learning'].get('ewc_lambda', 0.1)  # EWC regularization strength
+        
+        # === IMPROVEMENT 3: Gradient Accumulation ===
+        self.accumulation_steps = config['learning'].get('accumulation_steps', 1)
+        self._accumulated_grads = {i: torch.zeros(1, device=device) for i in range(self.num_groups)}
+        
+        # === IMPROVEMENT 4: Selection Momentum ===
+        self.selection_momentum = torch.zeros(self.num_groups, dtype=torch.float32, device=device)
+        self.momentum_beta = config['learning'].get('selection_momentum', 0.9)
+        
+        # === IMPROVEMENT 5: Gradient Checkpointing ===
+        self.use_checkpointing = config['learning'].get('gradient_checkpointing', False)
         
         print(f"Total parameters: {self.total_params:,}")
         print(f"Parameter groups: {self.num_groups}")
-        print(f"Top-K groups: {self.top_k}\n")
+        print(f"Top-K groups: {self.top_k}")
+        print(f"EWC Lambda: {self.ewc_lambda}")
+        print(f"Accumulation Steps: {self.accumulation_steps}")
+        print(f"Selection Momentum: {self.momentum_beta}")
+        print(f"Gradient Checkpointing: {self.use_checkpointing}\n")
     
     def train(self, data=None, max_steps: int = 1000):
         """Train with modular sparse updates and proper autoregressive loss."""
@@ -127,14 +147,28 @@ class HybridK1Trainer:
 
             # PROPER AUTOREGRESSIVE LOSS WITH AMP
             with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
-                # Forward through modular transformer
-                logits = self.model(x_tokens)  # [batch, seq_len, vocab_size]
+                # === IMPROVEMENT 5: Gradient Checkpointing ===
+                if self.use_checkpointing:
+                    from torch.utils.checkpoint import checkpoint
+                    logits = checkpoint(self.model, x_tokens, use_reentrant=False)
+                else:
+                    logits = self.model(x_tokens)
 
-                # Next-token prediction: predict y_tokens from x_tokens
-                loss = loss_fn(
+                # Next-token prediction loss
+                ce_loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),
                     y_tokens[:, 1:].reshape(-1)
                 )
+                
+                # === IMPROVEMENT 2: EWC Regularization ===
+                ewc_loss = 0.0
+                if self.ewc_lambda > 0 and self.total_steps > 0:
+                    for p in self.model.parameters():
+                        if p in self.importance:
+                            ewc_loss += (self.importance[p] * (p ** 2)).sum()
+                    ewc_loss = self.ewc_lambda * ewc_loss
+                
+                loss = ce_loss + ewc_loss
 
             # Keep loss on GPU, sync only at log intervals
             self._loss_buffer.append(loss.detach())
@@ -142,7 +176,12 @@ class HybridK1Trainer:
             # Backward with Scaler
             self.scaler.scale(loss).backward()
             
-            # Unscale gradients for ALL optimizers (needed for gradient norm calculation)
+            # === IMPROVEMENT 3: Gradient Accumulation ===
+            # Only perform update every accumulation_steps
+            if (step + 1) % self.accumulation_steps != 0:
+                continue  # Accumulate more gradients
+            
+            # Unscale gradients for ALL optimizers
             for opt in self.optimizers:
                 self.scaler.unscale_(opt)
 
@@ -153,17 +192,36 @@ class HybridK1Trainer:
                 for params in self.param_groups:
                     grads = [p.grad.flatten() for p in params if p.grad is not None]
                     if grads:
-                        grad_norms.append(torch.cat(grads).norm(2).item())
+                        grad_norms.append(torch.cat(grads).norm(2))
                     else:
-                        grad_norms.append(0.0)
+                        grad_norms.append(torch.tensor(0.0, device=device))
                 
-                # Select top-k groups by gradient norm (above median)
-                grad_norms_tensor = torch.tensor(grad_norms, device=device)
-                threshold = torch.median(grad_norms_tensor)
-                mask = grad_norms_tensor > threshold
+                grad_norms_tensor = torch.stack(grad_norms)
                 
+                # === IMPROVEMENT 1: Top-K Selection ===
+                # Select exactly top_k groups with highest gradient norms
+                k = min(self.top_k, self.num_groups)
+                _, top_indices = torch.topk(grad_norms_tensor, k=k)
+                mask = torch.zeros(self.num_groups, dtype=torch.bool, device=device)
+                mask[top_indices] = True
+                
+                # === IMPROVEMENT 4: Selection Momentum ===
+                # Smooth selection over time for stability
+                current_mask_float = mask.float()
+                self.selection_momentum = (self.momentum_beta * self.selection_momentum + 
+                                          (1 - self.momentum_beta) * current_mask_float)
+                # Final mask: groups with momentum > 0.5 get updated
+                mask = self.selection_momentum > 0.5
+                
+                # Ensure at least one group is selected
                 if not mask.any():
-                    mask[torch.argmax(grad_norms_tensor)] = True
+                    mask[torch.argmax(self.selection_momentum)] = True
+                
+                # === IMPROVEMENT 2: Update EWC Importance ===
+                # Accumulate Fisher Information (gradient squared)
+                for p in self.model.parameters():
+                    if p.grad is not None and p in self.importance:
+                        self.importance[p] += p.grad.detach() ** 2
                 
                 # Track stats
                 num_selected = mask.sum().item()
@@ -173,7 +231,9 @@ class HybridK1Trainer:
             for group_id in range(self.num_groups):
                 if mask[group_id]:
                     self.scaler.step(self.optimizers[group_id])
-                    self.optimizers[group_id].zero_grad(set_to_none=True)
+                    self.group_update_count[self.group_names[group_id]] += 1
+                # Zero ALL gradients (including unselected, for next accumulation)
+                self.optimizers[group_id].zero_grad(set_to_none=True)
             
             # Update scaler once
             self.scaler.update()
