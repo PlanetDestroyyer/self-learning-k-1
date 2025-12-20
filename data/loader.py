@@ -280,11 +280,17 @@ class DataLoader:
 
         return self._embeddings
 
-    def decode(self, indices: np.ndarray) -> str:
+    def decode(self, indices: Union[List[int], np.ndarray]) -> str:
         """Decode indices to text."""
         words = [self.idx_to_word.get(i, '<UNK>') for i in indices]
         return ' '.join(words)
+    
+    def tokenize(self, text: str) -> List[int]:
+        """Tokenize text to indices."""
+        words = text.lower().split()
+        return [self.word_to_idx.get(word, self.word_to_idx.get('<UNK>', 0)) for word in words]
 
     def get_vocab_size(self) -> int:
         """Get vocabulary size."""
         return len(self.vocab)
+
