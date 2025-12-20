@@ -83,8 +83,7 @@ def load_wikitext_data(vocab_size: int = 10000, seq_length: int = 64):
         data_loader = DataLoader(
             dataset_name='wikitext',
             vocab_size=vocab_size,
-            seq_length=seq_length,
-            use_real_data=True
+            seq_length=seq_length
         )
         
         train_size = len(data_loader.train_data)
