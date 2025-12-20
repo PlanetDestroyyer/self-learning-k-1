@@ -1,8 +1,8 @@
 {
   "system": {
     "name": "Self-Learning K-1 System",
-    "phase_1_duration": 2000,
-    "description": "Two-phase self-learning system with autonomous optimization"
+    "phase_1_duration": 999999999,
+    "description": "Phase 1 only - gradient-based agent selection (Phase 2 disabled)"
   },
   "model": {
     "input_dim": 128,
@@ -13,14 +13,16 @@
     "max_seq_len": 64
   },
   "hierarchy": {
-    "num_domains": 4,
-    "agents_per_domain": 8,
-    "depth": 3,
-    "branching_factor": 4,
+    "num_domains": 5,
+    "agents_per_domain": 5,
+    "sub_agents_per_agent": 4,
+    "depth": 4,
+    "branching_factor": 5,
     "agents_per_level": [
       1,
-      4,
-      16
+      5,
+      25,
+      100
     ]
   },
   "trust": {
