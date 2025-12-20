@@ -650,6 +650,15 @@ class HybridK1Trainer:
     def _print_summary(self, start_time, total_params, all_agents):
         """Print final training summary."""
         elapsed = time.time() - start_time
+        
+        # Guard against zero steps
+        if self.total_steps == 0:
+            print(f"\n{'='*70}")
+            print("Hybrid K-1 Training: No steps completed (no data)")
+            print(f"{'='*70}\n")
+            return {'total_steps': 0, 'total_params_updated': 0, 'avg_params_per_step': 0,
+                    'update_percentage': 0, 'time': elapsed}
+        
         avg_params_per_step = self.total_params_updated / self.total_steps
         update_pct = (avg_params_per_step / total_params) * 100
 

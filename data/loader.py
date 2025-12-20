@@ -60,6 +60,9 @@ class DataLoader:
         # Embeddings
         self._embeddings = None
 
+        # Automatically load data
+        self.load()
+
     def load(self):
         """Load and preprocess dataset."""
         print(f"Loading {self.dataset_name} dataset...")
