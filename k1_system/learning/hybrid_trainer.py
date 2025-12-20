@@ -109,6 +109,9 @@ class HybridK1Trainer:
         # GPU OPTIMIZATION: Use larger batch size from config
         batch_size = self.config.get('learning', {}).get('batch_size', 32)
 
+        # Initialize GradScaler for Mixed Precision (AMP)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+
         for step in range(max_steps):
             # Get batch
             if self.data_loader:
@@ -121,24 +124,28 @@ class HybridK1Trainer:
                 x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
                 y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
 
-            # PROPER AUTOREGRESSIVE LOSS
-            # Forward through modular transformer
-            logits = self.model(x_tokens)  # [batch, seq_len, vocab_size]
+            # PROPER AUTOREGRESSIVE LOSS WITH AMP
+            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+                # Forward through modular transformer
+                logits = self.model(x_tokens)  # [batch, seq_len, vocab_size]
 
-            # Next-token prediction: predict y_tokens from x_tokens
-            # Reshape for CrossEntropyLoss: [batch * (seq-1), vocab] and [batch * (seq-1)]
-            loss = loss_fn(
-                logits[:, :-1].reshape(-1, self.vocab_size),  # [batch*(seq-1), vocab]
-                y_tokens[:, 1:].reshape(-1)  # [batch*(seq-1)]
-            )
+                # Next-token prediction: predict y_tokens from x_tokens
+                loss = loss_fn(
+                    logits[:, :-1].reshape(-1, self.vocab_size),
+                    y_tokens[:, 1:].reshape(-1)
+                )
 
             # Keep loss on GPU, sync only at log intervals
             if not hasattr(self, '_loss_buffer'):
                 self._loss_buffer = []
             self._loss_buffer.append(loss.detach())
 
-            # Backward
-            loss.backward()
+            # Backward with Scaler
+            self.scaler.scale(loss).backward()
+
+            # Unscale gradients BEFORE sparse update logic to ensure correct norm calculations
+            # and to allow safe modification of gradients
+            self.scaler.unscale_(self.optimizer)
 
             # GPU-OPTIMIZED: Calculate gradient norms directly on GPU
             with torch.no_grad():
@@ -147,13 +154,14 @@ class HybridK1Trainer:
 
                 for i, params in enumerate(self.param_groups):
                     # Fast check: usually all params have grads in this model
-                    # We could skip the check for speed if we're sure
                     valid_grads = [p.grad for p in params if p.grad is not None]
                     if valid_grads:
-                        # Compute norm and store directly in GPU tensor
-                        # Optimization: Avoid list comprehension if possible, but this is okay-ish
-                        # Better: use individual squared sums
-                        sq_sum = torch.stack([g.norm()**2 for g in valid_grads]).sum()
+                        # Optimized norm calculation: sum of squares first, then sqrt
+                        # Using torch.cat -> norm is generally faster than stack -> loops for small count
+                        # but iterating is fine for small groups (~6 params).
+                        sq_sum = torch.tensor(0.0, device=device)
+                        for p in valid_grads:
+                            sq_sum += p.norm(2).pow(2)
                         grad_norms_tensor[i] = sq_sum.sqrt()
 
                 # Compute median on GPU
@@ -167,10 +175,9 @@ class HybridK1Trainer:
                     mask[torch.argmax(grad_norms_tensor)] = True
 
                 # FULLY ASYNC: Apply mask to gradients on GPU
-                # Do NOT sync mask to CPU. Multiply grads by mask (0.0 or 1.0)
                 mask_float = mask.to(dtype=torch.float32)
                 
-                # Update statistics on GPU (lazily sync at log time)
+                # Update statistics on GPU
                 self._gpu_mask_accumulator += mask.long()
                 
                 # Calculate params updated for this step (on GPU)
@@ -180,17 +187,15 @@ class HybridK1Trainer:
                 # Apply mask to gradients
                 for group_id in range(self.num_groups):
                     multiplier = mask_float[group_id]
-                    # Optimization: If multiplier is 0, we could skip, but that requires CPU check (sync)
-                    # So we just multiply. If 0, grad becomes 0.
                     for p in self.param_groups[group_id]:
                         if p.grad is not None:
                             p.grad.mul_(multiplier)
 
-            # 2. Optimizer step (native C++ implementation)
-            # Grads for unselected groups are now 0.0, so they won't change weights (for SGD)
-            self.optimizer.step()
+            # Optimizer step handling with Scaler
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             
-            # 3. Zero gradients efficiently
+            # Zero gradients
             self.optimizer.zero_grad(set_to_none=True)
             
             self.total_steps += 1
@@ -209,19 +214,15 @@ class HybridK1Trainer:
                     avg_loss = 0.0
 
                 # Sync Statistics
-                # Get current step params updated (just for the log)
                 params_updated = int(current_step_params.item())
                 
-                # Update python dict from GPU accumulator
                 group_counts_cpu = self._gpu_mask_accumulator.cpu().numpy()
                 for i, count in enumerate(group_counts_cpu):
                      self.group_update_count[self.group_names[i]] = int(count)
                 
-                # Total params updated
                 total_params_updated_cpu = self._gpu_params_updated_accumulator.item()
                 self.total_params_updated = int(total_params_updated_cpu)
                 
-                # Active groups count for this step
                 num_selected = int(mask.sum().item())
 
                 elapsed = time.time() - start_time
@@ -242,6 +243,7 @@ class HybridK1Trainer:
             if step % self.validation_interval == 0 and self.data_loader:
                 val_loss, val_ppl = self._validate()
                 print(f"[{step:6d}] VALIDATION | Loss: {val_loss:.4f} | Perplexity: {val_ppl:.2f}")
+
         
         # Final results
         elapsed = time.time() - start_time
