@@ -8,9 +8,12 @@
     "input_dim": 128,
     "hidden_dim": 256,
     "output_dim": 128,
-    "vocab_size": 256,
+    "vocab_size": 10000,
     "embed_dim": 128,
-    "max_seq_len": 64
+    "max_seq_len": 64,
+    "num_heads": 4,
+    "tree_depth": 3,
+    "branching_factor": 3
   },
   "hierarchy": {
     "num_domains": 5,
