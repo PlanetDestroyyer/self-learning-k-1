@@ -77,9 +77,17 @@ class HybridK1Trainer:
         print("="*70)
         print("MODULAR K-1: Sparse Updates + Autoregressive Loss")
         print("="*70)
+        print(f"Device: {device}")
+        if device.type == 'cuda':
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            print("⚠️  WARNING: CUDA not available! Training on CPU (VERY SLOW)")
+            print("   On Colab: Runtime → Change runtime type → T4 GPU")
         print(f"Architecture: Modular Transformer ({self.num_groups} groups)")
         print(f"Loss: Proper autoregressive next-token prediction")
         print(f"Training: {max_steps:,} steps")
+        print(f"Batch size: {self.config.get('learning', {}).get('batch_size', 32)}")
         print("="*70 + "\n")
         
         start_time = time.time()
@@ -157,13 +165,21 @@ class HybridK1Trainer:
             
             # Logging
             if step % self.log_interval == 0:
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
                 elapsed = time.time() - start_time
                 update_pct = 100 * params_updated / self.total_params
-                
+                steps_per_sec = (step + 1) / elapsed if elapsed > 0 else 0
+
+                gpu_mem = ""
+                if device.type == 'cuda':
+                    mem_allocated = torch.cuda.memory_allocated() / 1e9
+                    gpu_mem = f" | GPU: {mem_allocated:.2f}GB"
+
                 print(f"[{step:6d}] Loss: {loss.item():.4f} | "
                       f"Params: {params_updated:,} ({update_pct:.1f}%) | "
                       f"Groups: {len(selected)}/{self.num_groups} | "
-                      f"Time: {elapsed:.1f}s")
+                      f"Speed: {steps_per_sec:.1f} step/s{gpu_mem}")
             
             # Validation
             if step % self.validation_interval == 0 and self.data_loader:

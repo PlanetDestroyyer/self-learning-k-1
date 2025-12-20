@@ -78,8 +78,14 @@ class BaselineTrainer:
         print("\n" + "="*70)
         print("BASELINE: Traditional Backpropagation")
         print("="*70)
+        print(f"Device: {device}")
+        if device.type == 'cuda':
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            print("⚠️  WARNING: Running on CPU (VERY SLOW)")
         print("Approach: Compute gradients for ALL, update ALL parameters")
         print(f"Total parameters: {self.total_params:,}")
+        print(f"Batch size: {self.config.get('learning', {}).get('batch_size', 32)}")
         print("="*70 + "\n")
         
         start_time = time.time()
@@ -137,10 +143,19 @@ class BaselineTrainer:
             
             # Logging
             if step % self.log_interval == 0:
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
                 elapsed = time.time() - start_time
+                steps_per_sec = (step + 1) / elapsed if elapsed > 0 else 0
+
+                gpu_mem = ""
+                if device.type == 'cuda':
+                    mem_allocated = torch.cuda.memory_allocated() / 1e9
+                    gpu_mem = f" | GPU: {mem_allocated:.2f}GB"
+
                 print(f"[{step:4d}] Loss: {loss.item():.4f} | "
-                      f"Params updated: {self.total_params:,} (100%) | "
-                      f"Time: {elapsed:.1f}s")
+                      f"Params: {self.total_params:,} (100%) | "
+                      f"Speed: {steps_per_sec:.1f} step/s{gpu_mem}")
             
             # Validation
             if step % self.validation_interval == 0 and self.data_loader is not None:
