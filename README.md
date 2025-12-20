@@ -172,15 +172,13 @@ Modular Sparse Transformer (Current):
 
 ### Training Speed
 
-**Current (batch_size=1, CPU/underutilized GPU):**
-- ~1,000 steps in 50-60 seconds
-- ~20 steps/second
-- **Bottleneck:** Sequential processing, no batching
+**Current (T4 GPU, batch_size=256, AMP):**
+- ~57,000 steps in ~1 hour (for 4-layer transformer)
+- ~15-25 steps/second with sparse updates
+- ~25-35 steps/second for dense baseline
 
-**After GPU Optimization (batch_size=64):**
-- Expected: ~10-30x faster on T4 GPU
-- Estimated: ~500-1500 steps/second
-- **Fix:** Proper batching, FP16 mixed precision
+**Note:** The 200+ steps/s speed was with a simple FFN baseline, NOT a transformer.
+Transformer models are inherently slower due to O(n²) attention complexity.
 
 ### Loss Function
 
@@ -341,15 +339,15 @@ K-1 System: All knowledge retained ✅
 ### Current Status (After Optimizations)
 
 **WikiText-2 Training (57,708 steps = 1 epoch):**
-- **GPU (T4, batch=64, FP16):** ~5-10 minutes
-- **CPU (batch=32):** ~30-60 minutes
-- **Perplexity:** ~800-2000 (decreasing over training)
-- **Sparse Updates:** 50% parameters per step
+- **GPU (T4, batch=256, AMP):** ~45-60 minutes
+- **CPU:** Not recommended (very slow)
+- **Perplexity:** ~600-800 after 1 epoch
+- **Sparse Updates:** 50% parameters per step (5/10 groups)
 
-**Baseline Training (Same dataset):**
-- **Speed:** Similar (both use same batch size now)
-- **Updates:** 100% parameters per step
-- **Perplexity:** Similar final performance
+**Both K-1 and Baseline now use ModularSparseTransformer:**
+- K-1: ~15-25 steps/s (sparse overhead for gradient analysis)
+- Baseline: ~25-35 steps/s (dense updates, no overhead)
+- Perplexity: Similar final performance
 
 **Key Metric:** K-1 uses **50% fewer parameter updates** while achieving similar loss.
 

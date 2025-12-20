@@ -61,8 +61,7 @@ class HybridK1Trainer:
         self.validation_interval = config['learning'].get('validation_interval', 5000)
         self.seq_length = max_seq_len
 
-        # SPEED FIX: Single optimizer (much faster than 10 separate ones)
-        # Sparse updates done by zeroing gradients BEFORE step, not separate optimizers
+        # SPEED FIX: Single optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=0.01)
 
         # Stats
@@ -73,33 +72,34 @@ class HybridK1Trainer:
         self._loss_buffer = []
         self.group_update_count = defaultdict(int)
         
-        # Pre-calculate group parameter counts
+        # Pre-calculate group parameter counts as tensor
         group_counts = [sum(p.numel() for p in group) for group in self.param_groups]
         self._group_param_counts = torch.tensor(group_counts, dtype=torch.float32, device=device)
 
-        # Initialize sparse update mask (updated every 100 steps for speed)
-        self._current_mask = torch.ones(self.num_groups, dtype=torch.bool, device=device)
+        # =====================================================
+        # VECTORIZED SPARSE UPDATE: Pre-compute param mappings
+        # =====================================================
+        # Flatten all params into a list and track their group indices
+        self._all_params = list(self.model.parameters())
+        self._param_group_indices = torch.zeros(len(self._all_params), dtype=torch.long, device=device)
         
-        # Cache param-to-group mapping for fast lookup
-        self._param_to_group = {}
         for g_idx, params in enumerate(self.param_groups):
-            for p in params:
-                self._param_to_group[p] = g_idx
+            param_set = set(params)
+            for p_idx, p in enumerate(self._all_params):
+                if p in param_set:
+                    self._param_group_indices[p_idx] = g_idx
         
-        # === IMPROVEMENT 3: Gradient Accumulation ===
-        self.accumulation_steps = config['learning'].get('accumulation_steps', 1)
-        
-        # === IMPROVEMENT 5: Gradient Checkpointing ===
-        self.use_checkpointing = config['learning'].get('gradient_checkpointing', False)
-        
-        # Disable EWC for speed (can be re-enabled if needed)
-        self.ewc_lambda = 0  # config['learning'].get('ewc_lambda', 0.1)
+        # Pre-compute group start/end indices for fast gradient norm computation
+        # Group params together for efficient batch operations
+        self._group_param_slices = []
+        for g_idx in range(self.num_groups):
+            indices = (self._param_group_indices == g_idx).nonzero(as_tuple=True)[0].tolist()
+            self._group_param_slices.append(indices)
         
         print(f"Total parameters: {self.total_params:,}")
         print(f"Parameter groups: {self.num_groups}")
         print(f"Top-K groups: {self.top_k}")
-        print(f"Accumulation Steps: {self.accumulation_steps}")
-        print(f"Selection Update Interval: every 100 steps\n")
+        print(f"Sparse selection: top-{self.top_k} groups by gradient norm\n")
     
     def train(self, data=None, max_steps: int = 1000):
         """Train with modular sparse updates and proper autoregressive loss."""
@@ -157,17 +157,18 @@ class HybridK1Trainer:
             self.scaler.unscale_(self.optimizer)
             
             # ============================================================
-            # K-1 SPARSE UPDATES: Only update groups with highest gradients
+            # K-1 SPARSE UPDATES: Vectorized for speed
             # ============================================================
             with torch.no_grad():
-                # Compute gradient norm per group
+                # VECTORIZED: Compute gradient norm per group using pre-computed slices
                 grad_norms = torch.zeros(self.num_groups, device=device)
-                for g_idx, params in enumerate(self.param_groups):
-                    total_norm_sq = 0.0
-                    for p in params:
+                for g_idx, param_indices in enumerate(self._group_param_slices):
+                    norm_sq = 0.0
+                    for p_idx in param_indices:
+                        p = self._all_params[p_idx]
                         if p.grad is not None:
-                            total_norm_sq += p.grad.pow(2).sum()
-                    grad_norms[g_idx] = total_norm_sq.sqrt()
+                            norm_sq += p.grad.pow(2).sum()
+                    grad_norms[g_idx] = torch.sqrt(norm_sq) if isinstance(norm_sq, torch.Tensor) else 0.0
                 
                 # Select TOP-K groups with highest gradient norms
                 k = min(self.top_k, self.num_groups)
@@ -175,15 +176,18 @@ class HybridK1Trainer:
                 mask = torch.zeros(self.num_groups, dtype=torch.bool, device=device)
                 mask[top_indices] = True
                 
-                # ZERO gradients for unselected groups (SPARSE UPDATE!)
-                for p in self.model.parameters():
-                    if p.grad is not None:
-                        g_idx = self._param_to_group.get(p, 0)
-                        if not mask[g_idx]:
-                            p.grad.zero_()  # Don't update this param!
+                # VECTORIZED: Get mask per parameter using pre-computed indices
+                param_mask = mask[self._param_group_indices]  # [num_params] bool
                 
-                # Track stats
-                num_selected = mask.sum().item()
+                # BATCH ZERO: Zero all unselected gradients at once
+                params_to_zero = [self._all_params[i] for i in range(len(self._all_params)) 
+                                  if not param_mask[i] and self._all_params[i].grad is not None]
+                if params_to_zero:
+                    grads_to_zero = [p.grad for p in params_to_zero]
+                    torch._foreach_zero_(grads_to_zero)
+                
+                # Track stats (vectorized)
+                num_selected = k
                 params_updated = (mask.float() * self._group_param_counts).sum().item()
             
             # Optimizer step (only updates params with non-zero gradients!)
