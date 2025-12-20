@@ -170,8 +170,9 @@ def main():
     with open(config_path) as f:
         config = json.load(f)
     
-    config['learning']['log_interval'] = 500
-    steps_per_dataset = 5000
+    config['learning']['log_interval'] = 5000  # Log every 5000 steps
+    
+    # Run for 1 epoch per dataset
     
     # Load datasets
     print("\nLoading datasets...")
@@ -184,6 +185,13 @@ def main():
     # Create trainer
     trainer = BaselineTrainer(config, wiki_loader)
     
+    # Get epoch size (1 epoch = all training samples)
+    wiki_epoch = len(wiki_loader.train_data[0]) if isinstance(wiki_loader.train_data, tuple) else 50000
+    code_epoch = len(code_loader.train_data[0]) if isinstance(code_loader.train_data, tuple) else 5000
+    sci_epoch = len(sci_loader.train_data[0]) if isinstance(sci_loader.train_data, tuple) else 5000
+    
+    print(f"\nTraining epochs: Wiki={wiki_epoch}, Code={code_epoch}, Sci={sci_epoch}")
+    
     results = {
         'after_wiki': {},
         'after_code': {},
@@ -194,7 +202,7 @@ def main():
     print(f"\n{'='*70}")
     print("TRAINING ON: WIKITEXT")
     print(f"{'='*70}")
-    trainer.train(max_steps=steps_per_dataset)
+    trainer.train(max_steps=wiki_epoch)
     
     print("\n--- Evaluation after WikiText ---")
     results['after_wiki']['wiki'] = evaluate(trainer, wiki_loader, "WikiText")
@@ -204,7 +212,7 @@ def main():
     print("TRAINING ON: CODE (PYTHON)")
     print(f"{'='*70}")
     trainer.data_loader = code_loader
-    trainer.train(max_steps=steps_per_dataset)
+    trainer.train(max_steps=code_epoch)
     
     print("\n--- Evaluation after Code ---")
     results['after_code']['wiki'] = evaluate(trainer, wiki_loader, "WikiText")
@@ -215,7 +223,7 @@ def main():
     print("TRAINING ON: SCIENTIFIC")
     print(f"{'='*70}")
     trainer.data_loader = sci_loader
-    trainer.train(max_steps=steps_per_dataset)
+    trainer.train(max_steps=sci_epoch)
     
     print("\n--- Evaluation after Scientific ---")
     results['after_scientific']['wiki'] = evaluate(trainer, wiki_loader, "WikiText")

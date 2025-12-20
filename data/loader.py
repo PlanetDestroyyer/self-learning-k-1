@@ -148,7 +148,7 @@ class DataLoader:
             return datasets
 
     def _load_code_python(self) -> str:
-        """Load Python code dataset (CodeSearchNet)."""
+        """Load Python code dataset."""
         data_dir = self.data_dir / 'code_python'
         file_path = data_dir / 'train.txt'
         
@@ -156,22 +156,22 @@ class DataLoader:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
                 
-        print("Downloading Python Code dataset (CodeSearchNet)...")
+        print("Downloading Python Code dataset...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use streaming to avoid downloading huge dataset
-            dataset = datasets.load_dataset('code_search_net', 'python', split='train', streaming=True)
+            # Use bigcode/the-stack-smol which is accessible
+            dataset = datasets.load_dataset('bigcode/the-stack-smol', 'data/python', split='train', streaming=True, trust_remote_code=True)
             
-            # Take first 10,000 examples
-            print("Fetching 10,000 code examples...")
+            print("Fetching 5,000 code examples...")
             texts = []
             for i, item in enumerate(dataset):
-                if i >= 10000: break
-                texts.append(item['func_code_string'])
+                if i >= 5000: break
+                content = item.get('content', '')
+                if len(content) > 100:  # Only meaningful code
+                    texts.append(content[:2000])  # Limit size
             
             text = '\n\n'.join(texts)
             
-            # Save
             data_dir.mkdir(exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(text)
@@ -184,7 +184,7 @@ class DataLoader:
             return self._generate_synthetic_code()
 
     def _load_scientific(self) -> str:
-        """Load Scientific dataset (ArXiv Abstracts)."""
+        """Load Scientific dataset (ArXiv)."""
         data_dir = self.data_dir / 'scientific'
         file_path = data_dir / 'train.txt'
         
@@ -195,19 +195,19 @@ class DataLoader:
         print("Downloading Scientific dataset (ArXiv)...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use Crivedi/Multi-Label-Text-Classification-Dataset-from-Arxiv
-            dataset = datasets.load_dataset('Crivedi/Multi-Label-Text-Classification-Dataset-from-Arxiv', split='train', streaming=True)
+            # Use ccdv/arxiv-summarization which works
+            dataset = datasets.load_dataset('ccdv/arxiv-summarization', split='train', streaming=True, trust_remote_code=True)
             
-            # Take first 10,000 abstracts
-            print("Fetching 10,000 scientific abstracts...")
+            print("Fetching 5,000 scientific abstracts...")
             texts = []
             for i, item in enumerate(dataset):
-                if i >= 10000: break
-                texts.append(item['abstract'])
+                if i >= 5000: break
+                abstract = item.get('abstract', '')
+                if len(abstract) > 100:
+                    texts.append(abstract[:2000])
             
             text = '\n\n'.join(texts)
             
-            # Save
             data_dir.mkdir(exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(text)

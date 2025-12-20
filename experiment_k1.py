@@ -81,8 +81,9 @@ def main():
     config['model']['tree_depth'] = 3
     config['model']['branching_factor'] = 3
     config['learning']['top_k'] = 5
-    config['learning']['log_interval'] = 500
-    steps_per_dataset = 5000
+    config['learning']['log_interval'] = 5000  # Log every 5000 steps
+    
+    # Run for 1 epoch per dataset (steps = num_train_samples)
     
     # Load all datasets
     print("\nLoading datasets...")
@@ -99,6 +100,13 @@ def main():
     # Create trainer with WikiText
     trainer = HierarchicalK1Trainer(config, wiki_loader)
     
+    # Get epoch size (1 epoch = all training samples)
+    wiki_epoch = len(wiki_loader.train_data[0]) if isinstance(wiki_loader.train_data, tuple) else 50000
+    code_epoch = len(code_loader.train_data[0]) if isinstance(code_loader.train_data, tuple) else 5000
+    sci_epoch = len(sci_loader.train_data[0]) if isinstance(sci_loader.train_data, tuple) else 5000
+    
+    print(f"\nTraining epochs: Wiki={wiki_epoch}, Code={code_epoch}, Sci={sci_epoch}")
+    
     # Results storage
     results = {
         'after_wiki': {},
@@ -107,20 +115,20 @@ def main():
     }
     
     # ========== PHASE 1: Train on WikiText ==========
-    train_on_dataset(trainer, wiki_loader, "WikiText", steps_per_dataset)
+    train_on_dataset(trainer, wiki_loader, "WikiText", wiki_epoch)
     
     print("\n--- Evaluation after WikiText ---")
     results['after_wiki']['wiki'] = evaluate_on_dataset(trainer, wiki_loader, "WikiText")
     
     # ========== PHASE 2: Train on Code ==========
-    train_on_dataset(trainer, code_loader, "Code (Python)", steps_per_dataset)
+    train_on_dataset(trainer, code_loader, "Code (Python)", code_epoch)
     
     print("\n--- Evaluation after Code ---")
     results['after_code']['wiki'] = evaluate_on_dataset(trainer, wiki_loader, "WikiText")
     results['after_code']['code'] = evaluate_on_dataset(trainer, code_loader, "Code")
     
     # ========== PHASE 3: Train on Scientific ==========
-    train_on_dataset(trainer, sci_loader, "Scientific", steps_per_dataset)
+    train_on_dataset(trainer, sci_loader, "Scientific", sci_epoch)
     
     print("\n--- Evaluation after Scientific ---")
     results['after_scientific']['wiki'] = evaluate_on_dataset(trainer, wiki_loader, "WikiText")
