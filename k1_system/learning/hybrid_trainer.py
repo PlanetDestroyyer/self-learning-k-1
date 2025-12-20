@@ -217,22 +217,16 @@ class HybridK1Trainer:
                 if not mask.any():
                     mask[torch.argmax(self.selection_momentum)] = True
                 
-                # === IMPROVEMENT 2: Update EWC Importance ===
-                # Accumulate Fisher Information (gradient squared)
-                for p in self.model.parameters():
-                    if p.grad is not None and p in self.importance:
-                        self.importance[p] += p.grad.detach() ** 2
-                
-                # Track stats
+                # Track stats (vectorized - no Python loop!)
                 num_selected = mask.sum().item()
-                params_updated = sum(self._group_param_counts[i].item() for i in range(self.num_groups) if mask[i])
+                params_updated = (mask.float() * self._group_param_counts).sum().item()
 
             # TRUE SPARSE: Only step selected optimizers!
             for group_id in range(self.num_groups):
                 if mask[group_id]:
                     self.scaler.step(self.optimizers[group_id])
                     self.group_update_count[self.group_names[group_id]] += 1
-                # Zero ALL gradients (including unselected, for next accumulation)
+                # Zero ALL gradients
                 self.optimizers[group_id].zero_grad(set_to_none=True)
             
             # Update scaler once
@@ -240,6 +234,13 @@ class HybridK1Trainer:
             
             self.total_steps += 1
             self.total_params_updated += int(params_updated)
+            
+            # === IMPROVEMENT 2: Update EWC Importance (ONLY every 1000 steps) ===
+            if step % 1000 == 0 and self.ewc_lambda > 0:
+                with torch.no_grad():
+                    for p in self.model.parameters():
+                        if p.grad is not None and p in self.importance:
+                            self.importance[p] += p.grad.detach() ** 2
             
             # Logging
             if step % self.log_interval == 0:
