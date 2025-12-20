@@ -96,10 +96,18 @@ class HybridK1Trainer:
             indices = (self._param_group_indices == g_idx).nonzero(as_tuple=True)[0].tolist()
             self._group_param_slices.append(indices)
         
+        # Gradient Accumulation (effective batch = batch_size * accumulation_steps)
+        self.accumulation_steps = config['learning'].get('accumulation_steps', 1)
+        
+        # Data Prefetching (pre-load batches for faster training)
+        self.prefetch_batches = config['learning'].get('prefetch_batches', 4)
+        self._prefetch_queue = []
+        
         print(f"Total parameters: {self.total_params:,}")
         print(f"Parameter groups: {self.num_groups}")
-        print(f"Top-K groups: {self.top_k}")
-        print(f"Sparse selection: top-{self.top_k} groups by gradient norm\n")
+        print(f"Top-K groups: {self.top_k} (sparse updates)")
+        print(f"Gradient accumulation: {self.accumulation_steps} steps")
+        print(f"Data prefetch: {self.prefetch_batches} batches\n")
     
     def train(self, data=None, max_steps: int = 1000):
         """Train with modular sparse updates and proper autoregressive loss."""
@@ -127,18 +135,30 @@ class HybridK1Trainer:
 
         # Initialize GradScaler for Mixed Precision (AMP)
         self.scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
-
-        for step in range(max_steps):
-            # Get batch
+        
+        # =====================================================
+        # DATA PREFETCHING: Pre-load batches for faster training
+        # =====================================================
+        def prefetch_batch():
             if self.data_loader:
                 try:
-                    x_tokens, y_tokens = self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
+                    return self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
                 except:
-                    x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
-                    y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                    pass
+            return (torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device),
+                    torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device))
+        
+        # Pre-fill prefetch queue
+        for _ in range(self.prefetch_batches):
+            self._prefetch_queue.append(prefetch_batch())
+
+        for step in range(max_steps):
+            # Get batch from prefetch queue (fast!)
+            if self._prefetch_queue:
+                x_tokens, y_tokens = self._prefetch_queue.pop(0)
+                self._prefetch_queue.append(prefetch_batch())  # Refill
             else:
-                x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
-                y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                x_tokens, y_tokens = prefetch_batch()
 
             # Forward with AMP
             with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
@@ -147,13 +167,22 @@ class HybridK1Trainer:
                     logits[:, :-1].reshape(-1, self.vocab_size),
                     y_tokens[:, 1:].reshape(-1)
                 )
+                # Scale loss for gradient accumulation
+                loss = loss / self.accumulation_steps
 
             # Keep loss on GPU
-            self._loss_buffer.append(loss.detach())
+            self._loss_buffer.append(loss.detach() * self.accumulation_steps)  # Store unscaled
 
-            # Backward pass
-            self.optimizer.zero_grad()
+            # Backward pass (accumulate gradients)
             self.scaler.scale(loss).backward()
+            
+            # =====================================================
+            # GRADIENT ACCUMULATION: Only update every N steps
+            # =====================================================
+            if (step + 1) % self.accumulation_steps != 0:
+                continue  # Keep accumulating
+            
+            # Unscale for clipping/selection
             self.scaler.unscale_(self.optimizer)
             
             # ============================================================
@@ -193,6 +222,7 @@ class HybridK1Trainer:
             # Optimizer step (only updates params with non-zero gradients!)
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            self.optimizer.zero_grad(set_to_none=True)  # Clear for next accumulation
             
             self.total_steps += 1
             self.total_params_updated += int(params_updated)
