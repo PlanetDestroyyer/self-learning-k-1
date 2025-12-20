@@ -124,25 +124,30 @@ class HybridK1Trainer:
             # Backward
             loss.backward()
 
-            # OPTIMIZED: Calculate gradient per group with parallel norm computation
-            group_grads = []
+            # GPU-OPTIMIZED: Calculate gradient norms staying on GPU
             with torch.no_grad():
-                for i, params in enumerate(self.param_groups):
-                    # Compute norm more efficiently
-                    grad_norm = torch.stack([p.grad.norm() for p in params if p.grad is not None]).norm().item() if any(p.grad is not None for p in params) else 0.0
-                    group_grads.append((i, grad_norm))
-            
-            # SMART SELECTION: Only update groups with above-median gradients
-            all_grads = [g for _, g in group_grads]
-            grad_median = np.median(all_grads) if len(all_grads) > 0 else 0
-            grad_threshold = grad_median
-            
-            selected = [i for i, g in group_grads if g > grad_threshold]
-            
-            # Fallback
-            if len(selected) == 0:
-                group_grads.sort(key=lambda x: x[1], reverse=True)
-                selected = [group_grads[0][0]]
+                grad_norms = []
+                for params in self.param_groups:
+                    if any(p.grad is not None for p in params):
+                        # Compute norm and keep on GPU
+                        norm = torch.stack([p.grad.norm() for p in params if p.grad is not None]).norm()
+                        grad_norms.append(norm)
+                    else:
+                        grad_norms.append(torch.tensor(0.0, device=device))
+
+                # Stack to single tensor on GPU
+                grad_norms_tensor = torch.stack(grad_norms)
+
+                # Compute median on GPU
+                grad_threshold = torch.median(grad_norms_tensor)
+
+                # Select groups with above-median gradients (stays on GPU)
+                mask = grad_norms_tensor > grad_threshold
+                selected = torch.where(mask)[0].tolist()
+
+                # Fallback: if none selected, pick the one with highest gradient
+                if len(selected) == 0:
+                    selected = [torch.argmax(grad_norms_tensor).item()]
             
             # Update only selected groups
             params_updated = 0
