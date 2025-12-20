@@ -70,11 +70,138 @@ class DataLoader:
 
         if self.dataset_name == 'wikitext':
             text = self._load_wikitext()
+        elif self.dataset_name == 'code_python':
+            text = self._load_code_python()
+        elif self.dataset_name == 'scientific':
+            text = self._load_scientific()
         elif self.dataset_name == 'synthetic':
             text = self._generate_synthetic()
         else:
             # Assume it's a file path
             text = self._load_custom(self.dataset_name)
+
+    def _ensure_datasets_library(self):
+        """Ensure datasets library is installed."""
+        try:
+            import datasets
+            return datasets
+        except ImportError:
+            print("Installing 'datasets' library...")
+            import subprocess
+            subprocess.check_call(['pip', 'install', '-q', 'datasets'])
+            import datasets
+            return datasets
+
+    def _load_code_python(self) -> str:
+        """Load Python code dataset (CodeSearchNet)."""
+        data_dir = self.data_dir / 'code_python'
+        file_path = data_dir / 'train.txt'
+        
+        if file_path.exists():
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+                
+        print("Downloading Python Code dataset (CodeSearchNet)...")
+        try:
+            datasets = self._ensure_datasets_library()
+            # Use streaming to avoid downloading huge dataset
+            dataset = datasets.load_dataset('code_search_net', 'python', split='train', streaming=True)
+            
+            # Take first 10,000 examples
+            print("Fetching 10,000 code examples...")
+            texts = []
+            for i, item in enumerate(dataset):
+                if i >= 10000: break
+                texts.append(item['func_code_string'])
+            
+            text = '\n\n'.join(texts)
+            
+            # Save
+            data_dir.mkdir(exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(text)
+                
+            return text
+            
+        except Exception as e:
+            print(f"Download failed: {e}")
+            print("Using synthetic python code...")
+            return self._generate_synthetic_code()
+
+    def _load_scientific(self) -> str:
+        """Load Scientific dataset (ArXiv Abstracts)."""
+        data_dir = self.data_dir / 'scientific'
+        file_path = data_dir / 'train.txt'
+        
+        if file_path.exists():
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+                
+        print("Downloading Scientific dataset (ArXiv)...")
+        try:
+            datasets = self._ensure_datasets_library()
+            # Use Crivedi/Multi-Label-Text-Classification-Dataset-from-Arxiv
+            dataset = datasets.load_dataset('Crivedi/Multi-Label-Text-Classification-Dataset-from-Arxiv', split='train', streaming=True)
+            
+            # Take first 10,000 abstracts
+            print("Fetching 10,000 scientific abstracts...")
+            texts = []
+            for i, item in enumerate(dataset):
+                if i >= 10000: break
+                texts.append(item['abstract'])
+            
+            text = '\n\n'.join(texts)
+            
+            # Save
+            data_dir.mkdir(exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(text)
+                
+            return text
+            
+        except Exception as e:
+            print(f"Download failed: {e}")
+            print("Using synthetic scientific text...")
+            return self._generate_synthetic_scientific()
+
+    def _generate_synthetic_code(self) -> str:
+        """Generate synthetic Python code if download fails."""
+        templates = [
+            "def {func}({arg}):\n    return {arg} + 1",
+            "class {class_name}:\n    def __init__(self):\n        self.x = 0",
+            "if {var} > 0:\n    print('Hello World')",
+            "for i in range(10):\n    print(i)"
+        ]
+        words = ["main", "process", "data", "value", "Manager", "System"]
+        
+        text = []
+        for _ in range(5000):
+            import random
+            t = random.choice(templates)
+            w = random.choice(words)
+            text.append(t.format(func=w.lower(), arg="x", class_name=w, var="count"))
+        return "\n\n".join(text)
+
+    def _generate_synthetic_scientific(self) -> str:
+        """Generate synthetic scientific text if download fails."""
+        templates = [
+            "We propose a novel method for {topic} using {method}.",
+            "The results show significant improvement in {metric}.",
+            "Previous studies on {topic} have failed to address {issue}.",
+            "Our algorithm optimizes {metric} by 20% compared to baseline."
+        ]
+        topics = ["neural networks", "quantum computing", "gene editing", "climate models"]
+        methods = ["deep learning", "bayesian inference", "CRISPR", "simulation"]
+        
+        text = []
+        for _ in range(5000):
+            import random
+            t = random.choice(templates)
+            text.append(t.format(topic=random.choice(topics), 
+                               method=random.choice(methods), 
+                               metric="accuracy", 
+                               issue="scalability"))
+        return "\n".join(text)
 
         # Build vocabulary
         print("Building vocabulary...")
