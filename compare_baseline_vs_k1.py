@@ -854,13 +854,12 @@ class HybridK1Trainer:
         }
 
 
-def compare_approaches(num_epochs: int = 10, use_wikitext: bool = True, steps_per_epoch: int = None):
+def compare_approaches(num_epochs: int = 10, use_wikitext: bool = True):
     """Run comparison between baseline and hybrid K-1.
 
     Args:
         num_epochs: Number of epochs to train (default: 10)
         use_wikitext: Whether to use WikiText-2 dataset
-        steps_per_epoch: Steps per epoch (if None, uses full dataset)
     """
     print("\n" + "="*70)
     print("COMPARISON: Baseline vs Hybrid K-1 (Gradient+Trust+Diversity)")
@@ -877,8 +876,15 @@ def compare_approaches(num_epochs: int = 10, use_wikitext: bool = True, steps_pe
     if data_loader is None:
         data = generate_synthetic_data(n_samples=500)
         print(f"\nUsing synthetic data: {data.shape[0]} samples\n")
+        num_samples = 500
     else:
         data = None  # Not used when we have data_loader
+        num_samples = len(data_loader.train_data)
+
+    # Calculate max_steps based on epochs and dataset size
+    max_steps = num_epochs * num_samples
+    print(f"Dataset size: {num_samples:,} samples")
+    print(f"Total training steps: {max_steps:,} ({num_epochs} epochs x {num_samples:,} samples)")
 
     # Test Baseline
     baseline_config = load_config(use_k1=False)
@@ -988,6 +994,6 @@ WHY HYBRID IS BETTER THAN ORIGINAL K-1:
 
 
 if __name__ == "__main__":
-    # Run comparison with WikiText-2 dataset
+    # Run comparison with WikiText-2 dataset for 10 epochs
     # Set use_wikitext=False to use synthetic data instead
-    compare_approaches(max_steps=1000, use_wikitext=True)
+    compare_approaches(num_epochs=10, use_wikitext=True)
