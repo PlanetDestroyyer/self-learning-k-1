@@ -100,38 +100,37 @@ class HybridK1Trainer:
             # Get batch
             if self.data_loader:
                 try:
-                    x_batch, y_batch = self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
-                    # Process entire batch, not just first element
-                    x_tokens, y_tokens = x_batch, y_batch
+                    x_tokens, y_tokens = self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
                 except:
                     x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
                     y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             else:
                 x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
                 y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
-            
+
             # PROPER AUTOREGRESSIVE LOSS
             # Forward through modular transformer
             logits = self.model(x_tokens)  # [batch, seq_len, vocab_size]
 
             # Next-token prediction: predict y_tokens from x_tokens
-            # For each position i, predict token at position i+1
             # Reshape for CrossEntropyLoss: [batch * (seq-1), vocab] and [batch * (seq-1)]
             loss = loss_fn(
                 logits[:, :-1].reshape(-1, self.vocab_size),  # [batch*(seq-1), vocab]
                 y_tokens[:, 1:].reshape(-1)  # [batch*(seq-1)]
             )
-            
+
             self.loss_history.append(loss.item())
-            
+
             # Backward
             loss.backward()
-            
-            # Calculate gradient per group
+
+            # OPTIMIZED: Calculate gradient per group with parallel norm computation
             group_grads = []
-            for i, params in enumerate(self.param_groups):
-                grad_norm = sum((p.grad.norm().item() ** 2 if p.grad is not None else 0) for p in params) ** 0.5
-                group_grads.append((i, grad_norm))
+            with torch.no_grad():
+                for i, params in enumerate(self.param_groups):
+                    # Compute norm more efficiently
+                    grad_norm = torch.stack([p.grad.norm() for p in params if p.grad is not None]).norm().item() if any(p.grad is not None for p in params) else 0.0
+                    group_grads.append((i, grad_norm))
             
             # SMART SELECTION: Only update groups with above-median gradients
             all_grads = [g for _, g in group_grads]

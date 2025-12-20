@@ -380,16 +380,27 @@ class DataLoader:
         if not data:
             raise ValueError(f"No data for split '{split}'")
 
-        indices = np.random.choice(len(data), size=min(batch_size, len(data)), replace=False)
+        # OPTIMIZED: Use random integers instead of choice for speed
+        actual_batch_size = min(batch_size, len(data))
+        indices = np.random.randint(0, len(data), size=actual_batch_size)
 
-        batch_x = np.array([data[i][0] for i in indices])
-        batch_y = np.array([data[i][1] for i in indices])
+        # OPTIMIZED: Stack arrays directly instead of list comprehension
+        batch_x = np.stack([data[i][0] for i in indices])
+        batch_y = np.stack([data[i][1] for i in indices])
 
         # Convert to PyTorch tensors if requested
         if return_tensors == 'pt':
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            batch_x = torch.from_numpy(batch_x).long().to(device)
-            batch_y = torch.from_numpy(batch_y).long().to(device)
+            # OPTIMIZED: Create tensor on CPU first, then move to GPU (faster)
+            batch_x = torch.from_numpy(batch_x).long()
+            batch_y = torch.from_numpy(batch_y).long()
+
+            if device.type == 'cuda':
+                batch_x = batch_x.pin_memory().to(device, non_blocking=True)
+                batch_y = batch_y.pin_memory().to(device, non_blocking=True)
+            else:
+                batch_x = batch_x.to(device)
+                batch_y = batch_y.to(device)
 
         return batch_x, batch_y
 
