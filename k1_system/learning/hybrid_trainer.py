@@ -53,10 +53,6 @@ class HybridK1Trainer:
         self.group_names = [f"group_{i}" for i in range(len(self.param_groups))]
         self.num_groups = len(self.param_groups)
         
-        # Enable torch.compile for PyTorch 2.0+ JIT optimization
-        if hasattr(torch, 'compile'):
-            self.model = torch.compile(self.model, mode='reduce-overhead')
-        
         # Config
         config_top_k = config['learning']['top_k']
         self.top_k = min(config_top_k, max(1, self.num_groups // 2))
@@ -77,11 +73,7 @@ class HybridK1Trainer:
         self._loss_buffer = []  # Pre-initialize to avoid hasattr check every step
         self.group_update_count = defaultdict(int)
         
-        # GPU Stats Accumulators (avoid CPU sync during training)
-        self._gpu_mask_accumulator = torch.zeros(self.num_groups, dtype=torch.long, device=device)
-        self._gpu_params_updated_accumulator = torch.zeros(1, dtype=torch.float32, device=device)
-        
-        # Pre-calculate group parameter counts on GPU
+        # Pre-calculate group parameter counts
         group_counts = [sum(p.numel() for p in group) for group in self.param_groups]
         self._group_param_counts = torch.tensor(group_counts, dtype=torch.float32, device=device)
 
@@ -145,51 +137,41 @@ class HybridK1Trainer:
 
             # Backward with Scaler
             self.scaler.scale(loss).backward()
-
-            # Unscale gradients BEFORE sparse update logic to ensure correct norm calculations
-            # and to allow safe modification of gradients
+            
+            # Unscale gradients for sparse selection
             self.scaler.unscale_(self.optimizer)
 
-            # VECTORIZED GRADIENT NORM CALCULATION
-            # Collect all gradients and compute norms in one fused operation
+            # SPARSE UPDATE: Select which parameter groups to update
             with torch.no_grad():
-                # Compute gradient norms for each group using vectorized ops
-                grad_norms_tensor = torch.zeros(self.num_groups, device=device)
-                
-                for i, params in enumerate(self.param_groups):
-                    # Flatten all grads in group and compute single norm
+                # Compute gradient norms per group
+                grad_norms = []
+                for params in self.param_groups:
                     grads = [p.grad.flatten() for p in params if p.grad is not None]
                     if grads:
-                        grad_norms_tensor[i] = torch.cat(grads).norm(2)
-
-                # Compute threshold (median) on GPU
-                grad_threshold = torch.median(grad_norms_tensor)
-
-                # Select groups with above-median gradients (vectorized)
-                mask = grad_norms_tensor > grad_threshold
+                        grad_norms.append(torch.cat(grads).norm(2).item())
+                    else:
+                        grad_norms.append(0.0)
                 
-                # Fallback: if none selected, pick highest
+                # Select top-k groups by gradient norm
+                grad_norms_tensor = torch.tensor(grad_norms, device=device)
+                threshold = torch.median(grad_norms_tensor)
+                mask = grad_norms_tensor > threshold
+                
                 if not mask.any():
                     mask[torch.argmax(grad_norms_tensor)] = True
-
-                # Convert mask to float for multiplication
-                mask_float = mask.float()
                 
-                # Update GPU statistics
-                self._gpu_mask_accumulator += mask.long()
-                current_step_params = (mask_float * self._group_param_counts).sum()
-                self._gpu_params_updated_accumulator += current_step_params
-
-                # VECTORIZED GRADIENT MASKING
-                # Apply mask to all parameters at once using foreach operations
+                # Zero gradients for unselected groups
                 for group_id in range(self.num_groups):
                     if not mask[group_id]:
-                        # Zero out gradients for unselected groups
                         for p in self.param_groups[group_id]:
                             if p.grad is not None:
                                 p.grad.zero_()
+                
+                # Track stats
+                num_selected = mask.sum().item()
+                params_updated = sum(self._group_param_counts[i].item() for i in range(self.num_groups) if mask[i])
 
-            # Optimizer step handling with Scaler
+            # Optimizer step (using scaler for AMP)
             self.scaler.step(self.optimizer)
             self.scaler.update()
             
@@ -197,6 +179,7 @@ class HybridK1Trainer:
             self.optimizer.zero_grad(set_to_none=True)
             
             self.total_steps += 1
+            self.total_params_updated += int(params_updated)
             
             # Logging
             if step % self.log_interval == 0:
@@ -211,18 +194,6 @@ class HybridK1Trainer:
                 else:
                     avg_loss = 0.0
 
-                # Sync Statistics
-                params_updated = int(current_step_params.item())
-                
-                group_counts_cpu = self._gpu_mask_accumulator.cpu().numpy()
-                for i, count in enumerate(group_counts_cpu):
-                     self.group_update_count[self.group_names[i]] = int(count)
-                
-                total_params_updated_cpu = self._gpu_params_updated_accumulator.item()
-                self.total_params_updated = int(total_params_updated_cpu)
-                
-                num_selected = int(mask.sum().item())
-
                 elapsed = time.time() - start_time
                 update_pct = 100 * params_updated / self.total_params
                 steps_per_sec = (step + 1) / elapsed if elapsed > 0 else 0
@@ -233,8 +204,8 @@ class HybridK1Trainer:
                     gpu_mem = f" | GPU: {mem_allocated:.2f}GB"
 
                 print(f"[{step:6d}] Loss: {avg_loss:.4f} | "
-                      f"Params: {params_updated:,} ({update_pct:.1f}%) | "
-                      f"Groups: {num_selected}/{self.num_groups} | "
+                      f"Params: {int(params_updated):,} ({update_pct:.1f}%) | "
+                      f"Groups: {int(num_selected)}/{self.num_groups} | "
                       f"Speed: {steps_per_sec:.1f} step/s{gpu_mem}")
             
             # Validation
