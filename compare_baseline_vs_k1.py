@@ -854,12 +854,18 @@ class HybridK1Trainer:
         }
 
 
-def compare_approaches(max_steps: int = 1000, use_wikitext: bool = True):
-    """Run comparison between baseline and hybrid K-1."""
+def compare_approaches(num_epochs: int = 10, use_wikitext: bool = True, steps_per_epoch: int = None):
+    """Run comparison between baseline and hybrid K-1.
+
+    Args:
+        num_epochs: Number of epochs to train (default: 10)
+        use_wikitext: Whether to use WikiText-2 dataset
+        steps_per_epoch: Steps per epoch (if None, uses full dataset)
+    """
     print("\n" + "="*70)
     print("COMPARISON: Baseline vs Hybrid K-1 (Gradient+Trust+Diversity)")
     print("="*70)
-    print(f"Test: {max_steps} training steps")
+    print(f"Training: {num_epochs} epochs")
     print("="*70)
 
     # Load data
