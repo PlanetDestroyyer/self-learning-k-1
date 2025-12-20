@@ -72,6 +72,15 @@ class HybridK1Trainer:
         self.loss_history = []
         self.group_update_count = defaultdict(int)
         
+        # GPU Stats Accumulators (avoid CPU sync during training)
+        self._gpu_mask_accumulator = torch.zeros(self.num_groups, dtype=torch.long, device=device)
+        self._gpu_params_updated_accumulator = torch.zeros(1, dtype=torch.float32, device=device)
+        
+        # Pre-calculate group parameter counts on GPU
+        group_counts = [sum(p.numel() for p in group) for group in self.param_groups]
+        self._group_param_counts = torch.tensor(group_counts, dtype=torch.float32, device=device)
+
+        
         print(f"Total parameters: {self.total_params:,}")
         print(f"Parameter groups: {self.num_groups}")
         print(f"Top-K groups: {self.top_k}\n")
@@ -137,10 +146,15 @@ class HybridK1Trainer:
                 grad_norms_tensor = torch.zeros(self.num_groups, device=device)
 
                 for i, params in enumerate(self.param_groups):
-                    if any(p.grad is not None for p in params):
+                    # Fast check: usually all params have grads in this model
+                    # We could skip the check for speed if we're sure
+                    valid_grads = [p.grad for p in params if p.grad is not None]
+                    if valid_grads:
                         # Compute norm and store directly in GPU tensor
-                        norm = torch.stack([p.grad.norm() for p in params if p.grad is not None]).norm()
-                        grad_norms_tensor[i] = norm
+                        # Optimization: Avoid list comprehension if possible, but this is okay-ish
+                        # Better: use individual squared sums
+                        sq_sum = torch.stack([g.norm()**2 for g in valid_grads]).sum()
+                        grad_norms_tensor[i] = sq_sum.sqrt()
 
                 # Compute median on GPU
                 grad_threshold = torch.median(grad_norms_tensor)
@@ -152,34 +166,33 @@ class HybridK1Trainer:
                 if not mask.any():
                     mask[torch.argmax(grad_norms_tensor)] = True
 
-                # Convert mask to CPU once (instead of individual .item() calls)
-                mask_cpu = mask.cpu().numpy()
+                # FULLY ASYNC: Apply mask to gradients on GPU
+                # Do NOT sync mask to CPU. Multiply grads by mask (0.0 or 1.0)
+                mask_float = mask.to(dtype=torch.float32)
+                
+                # Update statistics on GPU (lazily sync at log time)
+                self._gpu_mask_accumulator += mask.long()
+                
+                # Calculate params updated for this step (on GPU)
+                current_step_params = (mask_float * self._group_param_counts).sum()
+                self._gpu_params_updated_accumulator += current_step_params
 
-            # Update only selected groups
-            # Sparse Updates: optimized with torch.optim
-            params_updated = 0
-            num_selected = 0
-            
-            # 1. Nullify gradients of unselected groups (Sparse Update)
-            for group_id in range(self.num_groups):
-                if not mask_cpu[group_id]:
-                    # Inactive group: clear gradients so optimizer skips them
+                # Apply mask to gradients
+                for group_id in range(self.num_groups):
+                    multiplier = mask_float[group_id]
+                    # Optimization: If multiplier is 0, we could skip, but that requires CPU check (sync)
+                    # So we just multiply. If 0, grad becomes 0.
                     for p in self.param_groups[group_id]:
-                        p.grad = None
-                else:
-                    # Active group: track stats
-                    num_selected += 1
-                    self.group_update_count[self.group_names[group_id]] += 1
-                    for p in self.param_groups[group_id]:
-                        params_updated += p.numel()
+                        if p.grad is not None:
+                            p.grad.mul_(multiplier)
 
             # 2. Optimizer step (native C++ implementation)
+            # Grads for unselected groups are now 0.0, so they won't change weights (for SGD)
             self.optimizer.step()
             
             # 3. Zero gradients efficiently
             self.optimizer.zero_grad(set_to_none=True)
             
-            self.total_params_updated += params_updated
             self.total_steps += 1
             
             # Logging
@@ -187,13 +200,29 @@ class HybridK1Trainer:
                 if device.type == 'cuda':
                     torch.cuda.synchronize()
 
-                # Sync loss buffer once (instead of every step)
+                # Sync loss buffer
                 if self._loss_buffer:
                     avg_loss = torch.stack(self._loss_buffer).mean().item()
                     self.loss_history.append(avg_loss)
                     self._loss_buffer = []
                 else:
                     avg_loss = 0.0
+
+                # Sync Statistics
+                # Get current step params updated (just for the log)
+                params_updated = int(current_step_params.item())
+                
+                # Update python dict from GPU accumulator
+                group_counts_cpu = self._gpu_mask_accumulator.cpu().numpy()
+                for i, count in enumerate(group_counts_cpu):
+                     self.group_update_count[self.group_names[i]] = int(count)
+                
+                # Total params updated
+                total_params_updated_cpu = self._gpu_params_updated_accumulator.item()
+                self.total_params_updated = int(total_params_updated_cpu)
+                
+                # Active groups count for this step
+                num_selected = int(mask.sum().item())
 
                 elapsed = time.time() - start_time
                 update_pct = 100 * params_updated / self.total_params
