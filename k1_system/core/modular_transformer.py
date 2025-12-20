@@ -50,7 +50,7 @@ class ModularSparseTransformer(nn.Module):
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             layer = nn.ModuleDict({
-                'attn': MultiHeadAttention(embed_dim, num_heads, dropout),
+                'attn': MultiHeadAttention(embed_dim, num_heads, dropout, max_seq_len),
                 'attn_norm': nn.LayerNorm(embed_dim),
                 'ffn': FeedForward(embed_dim, ff_dim, dropout),
                 'ffn_norm': nn.LayerNorm(embed_dim)
@@ -151,21 +151,25 @@ class ModularSparseTransformer(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     """Multi-head self-attention"""
-    
-    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1):
+
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1, max_seq_len: int = 64):
         super().__init__()
         assert embed_dim % num_heads == 0
-        
+
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        
+
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
-        
+
         self.dropout = nn.Dropout(dropout)
+
+        # Pre-compute causal mask once (MAJOR SPEEDUP!)
+        causal_mask = torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
+        self.register_buffer('causal_mask', causal_mask)
         
     def forward(self, query, key, value, mask=None):
         batch_size, seq_len, _ = query.shape
@@ -177,10 +181,10 @@ class MultiHeadAttention(nn.Module):
         
         # Attention scores
         scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.head_dim)
-        
-        # Causal mask (autoregressive)
+
+        # Use pre-computed causal mask (slice to current seq_len)
         if mask is None:
-            mask = torch.triu(torch.ones(seq_len, seq_len, device=query.device), diagonal=1).bool()
+            mask = self.causal_mask[:seq_len, :seq_len]
         scores = scores.masked_fill(mask.unsqueeze(0).unsqueeze(0), float('-inf'))
         
         # Attention weights
