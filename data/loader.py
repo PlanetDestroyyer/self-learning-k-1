@@ -148,7 +148,7 @@ class DataLoader:
             return datasets
 
     def _load_code_python(self) -> str:
-        """Load Python code dataset (codeparrot/github-code)."""
+        """Load Python code dataset."""
         data_dir = self.data_dir / 'code_python'
         file_path = data_dir / 'train.txt'
         
@@ -156,25 +156,24 @@ class DataLoader:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
                 
-        print("Downloading Python Code dataset (codeparrot/github-code)...")
+        print("Downloading Python Code dataset (nampdn-ai/tiny-codes)...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use codeparrot/github-code with Python filter - verified working
+            # Use nampdn-ai/tiny-codes - simple dataset without loading script
             dataset = datasets.load_dataset(
-                'codeparrot/github-code', 
-                streaming=True, 
+                'nampdn-ai/tiny-codes', 
                 split='train',
-                languages=['Python'],
-                trust_remote_code=True
+                streaming=True
             )
             
             print("Fetching 5,000 Python code examples...")
             texts = []
             for i, item in enumerate(dataset):
                 if i >= 5000: break
-                code = item.get('code', '')
-                if len(code) > 100:  # Only meaningful code
-                    texts.append(code[:2000])  # Limit size
+                # Get code from response field
+                code = item.get('response', '') or item.get('code', '') or str(item)
+                if len(code) > 100:
+                    texts.append(code[:2000])
             
             text = '\n\n'.join(texts)
             
@@ -201,8 +200,12 @@ class DataLoader:
         print("Downloading Scientific dataset (ArXiv)...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use ccdv/arxiv-summarization which works
-            dataset = datasets.load_dataset('ccdv/arxiv-summarization', split='train', streaming=True, trust_remote_code=True)
+            # Use ccdv/arxiv-summarization without trust_remote_code
+            dataset = datasets.load_dataset(
+                'ccdv/arxiv-summarization', 
+                split='train', 
+                streaming=True
+            )
             
             print("Fetching 5,000 scientific abstracts...")
             texts = []
