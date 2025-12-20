@@ -151,15 +151,44 @@ class HybridK1Trainer:
             # Keep loss on GPU
             self._loss_buffer.append(loss.detach())
 
-            # Backward with Scaler (same as baseline!)
+            # Backward pass
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            
+            # ============================================================
+            # K-1 SPARSE UPDATES: Only update groups with highest gradients
+            # ============================================================
+            with torch.no_grad():
+                # Compute gradient norm per group
+                grad_norms = torch.zeros(self.num_groups, device=device)
+                for g_idx, params in enumerate(self.param_groups):
+                    total_norm_sq = 0.0
+                    for p in params:
+                        if p.grad is not None:
+                            total_norm_sq += p.grad.pow(2).sum()
+                    grad_norms[g_idx] = total_norm_sq.sqrt()
+                
+                # Select TOP-K groups with highest gradient norms
+                k = min(self.top_k, self.num_groups)
+                _, top_indices = torch.topk(grad_norms, k=k)
+                mask = torch.zeros(self.num_groups, dtype=torch.bool, device=device)
+                mask[top_indices] = True
+                
+                # ZERO gradients for unselected groups (SPARSE UPDATE!)
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        g_idx = self._param_to_group.get(p, 0)
+                        if not mask[g_idx]:
+                            p.grad.zero_()  # Don't update this param!
+                
+                # Track stats
+                num_selected = mask.sum().item()
+                params_updated = (mask.float() * self._group_param_counts).sum().item()
+            
+            # Optimizer step (only updates params with non-zero gradients!)
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            
-            # Fixed stats for now (will add proper sparse tracking later)
-            num_selected = self.top_k
-            params_updated = self.total_params // 2  # ~50%
             
             self.total_steps += 1
             self.total_params_updated += int(params_updated)
