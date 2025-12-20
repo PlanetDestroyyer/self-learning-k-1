@@ -61,8 +61,12 @@ class HybridK1Trainer:
         self.validation_interval = config['learning'].get('validation_interval', 5000)
         self.seq_length = max_seq_len
 
-        # Initialize Optimizer (Standard SGD matches the manual update logic)
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
+        # TRUE SPARSE UPDATES: Separate optimizer per group
+        # This allows us to only call .step() on selected groups
+        self.optimizers = []
+        for group_params in self.param_groups:
+            opt = torch.optim.SGD(group_params, lr=self.lr)
+            self.optimizers.append(opt)
 
         
         # Stats
@@ -138,8 +142,9 @@ class HybridK1Trainer:
             # Backward with Scaler
             self.scaler.scale(loss).backward()
             
-            # Unscale gradients for sparse selection
-            self.scaler.unscale_(self.optimizer)
+            # Unscale gradients for ALL optimizers (needed for gradient norm calculation)
+            for opt in self.optimizers:
+                self.scaler.unscale_(opt)
 
             # SPARSE UPDATE: Select which parameter groups to update
             with torch.no_grad():
@@ -152,7 +157,7 @@ class HybridK1Trainer:
                     else:
                         grad_norms.append(0.0)
                 
-                # Select top-k groups by gradient norm
+                # Select top-k groups by gradient norm (above median)
                 grad_norms_tensor = torch.tensor(grad_norms, device=device)
                 threshold = torch.median(grad_norms_tensor)
                 mask = grad_norms_tensor > threshold
@@ -160,23 +165,18 @@ class HybridK1Trainer:
                 if not mask.any():
                     mask[torch.argmax(grad_norms_tensor)] = True
                 
-                # Zero gradients for unselected groups
-                for group_id in range(self.num_groups):
-                    if not mask[group_id]:
-                        for p in self.param_groups[group_id]:
-                            if p.grad is not None:
-                                p.grad.zero_()
-                
                 # Track stats
                 num_selected = mask.sum().item()
                 params_updated = sum(self._group_param_counts[i].item() for i in range(self.num_groups) if mask[i])
 
-            # Optimizer step (using scaler for AMP)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            # TRUE SPARSE: Only step selected optimizers!
+            for group_id in range(self.num_groups):
+                if mask[group_id]:
+                    self.scaler.step(self.optimizers[group_id])
+                    self.optimizers[group_id].zero_grad(set_to_none=True)
             
-            # Zero gradients
-            self.optimizer.zero_grad(set_to_none=True)
+            # Update scaler once
+            self.scaler.update()
             
             self.total_steps += 1
             self.total_params_updated += int(params_updated)
