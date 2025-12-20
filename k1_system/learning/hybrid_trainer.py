@@ -51,24 +51,19 @@ class HybridK1Trainer:
         print(f"Created network: {embed_dim}→{hidden_dim}→{output_dim}→{vocab_size}")
         
         # Partition parameters into groups
-        self.num_groups = config['hierarchy']['num_domains'] * config['hierarchy']['agents_per_domain'] + 1
+        # Note: We have ~9 parameter tensors (embedding.weight, 6 linear layer weights/biases, output.weight)
+        # So we create groups from these tensors
         all_params = list(self.embedding.parameters()) + list(self.network.parameters()) + list(self.output_proj.parameters())
         
-        params_per_group = max(1, len(all_params) // self.num_groups)
-        self.param_groups = []
-        self.group_names = []
-        
-        for i in range(self.num_groups):
-            start = i * params_per_group
-            end = start + params_per_group if i < self.num_groups - 1 else len(all_params)
-            if start < len(all_params):
-                self.param_groups.append(all_params[start:end])
-                self.group_names.append(f"agent_{i}")
-        
+        # Each parameter tensor becomes a group (simple approach)
+        self.param_groups = [[p] for p in all_params]
+        self.group_names = [f"agent_{i}" for i in range(len(self.param_groups))]
         self.num_groups = len(self.param_groups)
         
-        # Config
-        self.top_k = config['learning']['top_k']
+        # Config - FIXED: top_k should be less than num_groups!
+        config_top_k = config['learning']['top_k']
+        # Adjust top_k to be ~50% of available groups
+        self.top_k = min(config_top_k, max(1, self.num_groups // 2))  # ~50% of groups
         self.lr = config['learning']['learning_rate']
         self.log_interval = config['learning'].get('log_interval', 5000)
         self.validation_interval = config['learning'].get('validation_interval', 5000)
@@ -131,11 +126,20 @@ class HybridK1Trainer:
                 grad_norm = sum((p.grad.norm().item() ** 2 if p.grad is not None else 0) for p in params) ** 0.5
                 group_grads.append((i, grad_norm))
             
-            # Select top-K
-            group_grads.sort(key=lambda x: x[1], reverse=True)
-            selected = [g for g, _ in group_grads[:self.top_k]]
+            # SMART SELECTION: Only update groups with significant gradients (above median)
+            # This ensures we only update what's NEEDED, not arbitrary top-k
+            all_grads = [g for _, g in group_grads]
+            grad_median = np.median(all_grads) if len(all_grads) > 0 else 0
+            grad_threshold = grad_median  # Update only above-median gradients
             
-            # Update only selected groups
+            selected = [i for i, g in group_grads if g > grad_threshold]
+            
+            # Fallback: if no gradients above threshold, take top-1 at minimum
+            if len(selected) == 0:
+                group_grads.sort(key=lambda x: x[1], reverse=True)
+                selected = [group_grads[0][0]]
+            
+            # Update only selected groups (those that NEED it)
             params_updated = 0
             for group_id in selected:
                 for p in self.param_groups[group_id]:
@@ -162,7 +166,7 @@ class HybridK1Trainer:
                 
                 print(f"[{step:4d}] Phase 1 | Loss: {loss.item():.4f} | "
                       f"Params updated: {params_updated:,} ({update_pct:.1f}%) | "
-                      f"Top-K: {self.top_k} | Trust (high/low): {high_trust}/{low_trust} | "
+                      f"Groups: {len(selected)}/{self.num_groups} | Trust (high/low): {high_trust}/{low_trust} | "
                       f"Time: {elapsed:.1f}s")
             
             # Validation
