@@ -64,7 +64,13 @@ def load_config(use_k1: bool = True) -> dict:
             'model': {
                 'vocab_size': 10000,
                 'embed_dim': 128,
-                'hidden_dim': 256
+                'hidden_dim': 256,
+                'max_seq_len': 64
+            },
+            'learning': {
+                'learning_rate': 0.001,
+                'log_interval': 10000,
+                'validation_interval': 5000
             },
             'training': {
                 'learning_rate': 0.001,
