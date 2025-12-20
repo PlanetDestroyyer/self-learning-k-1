@@ -16,24 +16,23 @@ import time
 from typing import Dict, List, Tuple
 from collections import defaultdict
 
-from ..core import Hierarchy, Agent, TrustSystem, HierarchicalRouter
+from ..core import Hierarchy, Agent, TrustSystem
 from ..initialization import HierarchyBuilder
 from ..utils import TrainingLogger, MetricsTracker
-from .forward_pass import ForwardPass
 from .weight_update import AdaptiveWeightUpdater
 
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def validate_k1_system(forward_pass: ForwardPass, data_loader,
+def validate_k1_system(all_agents: List, data_loader,
                        embedding: nn.Module = None, output_proj: nn.Module = None,
                        num_batches: int = 10, vocab_size: int = 256) -> Tuple[float, float]:
     """
     Run validation on K-1 system using cross-entropy loss and proper perplexity.
 
     Args:
-        forward_pass: K-1 ForwardPass system
+        all_agents: List of all agents in the hierarchy
         data_loader: DataLoader with validation data
         embedding: Embedding layer for token indices (if using WikiText)
         output_proj: Output projection layer (embed_dim -> vocab_size)
@@ -65,14 +64,23 @@ def validate_k1_system(forward_pass: ForwardPass, data_loader,
                     x_vector = torch.mean(x_embedded, dim=0)  # Mean pooling
                     x = x_vector.detach().cpu().numpy()
 
-                    # Forward through K-1 system
-                    output, _ = forward_pass.forward(x, mode='hard')
-
-                    # Convert output to tensor
-                    if isinstance(output, np.ndarray):
-                        output_tensor = torch.from_numpy(output).float().to(device)
+                    # SIMPLIFIED: Process all agents directly (no routing)
+                    agent_outputs = []
+                    for agent in all_agents:
+                        try:
+                            agent_output = agent.forward(x)
+                            if isinstance(agent_output, np.ndarray):
+                                agent_outputs.append(torch.from_numpy(agent_output).float().to(device))
+                            else:
+                                agent_outputs.append(agent_output.to(device))
+                        except:
+                            continue
+                    
+                    # Aggregate outputs
+                    if len(agent_outputs) > 0:
+                        output_tensor = torch.stack(agent_outputs).mean(dim=0)
                     else:
-                        output_tensor = output.to(device)
+                        output_tensor = torch.zeros(128, device=device)  # Fallback
 
                     # Compute cross-entropy loss if we have output projection
                     if output_proj is not None:
@@ -199,18 +207,9 @@ class HybridK1Trainer:
             cache_threshold=config['trust']['cache_threshold']
         )
 
-        self.router = HierarchicalRouter(
-            hierarchy=self.hierarchy,
-            confidence_threshold=config['structure']['routing_confidence_threshold'],
-            max_depth=config['structure']['max_hierarchy_depth'],
-            exploration_rate=config['exploration']['initial_rate']
-        )
-
-        self.forward_pass = ForwardPass(
-            hierarchy=self.hierarchy,
-            router=self.router,
-            trust_cache=self.trust_system.trust_cache
-        )
+        # SIMPLIFIED: No routing! Just process all agents directly
+        # Get all agents for direct processing
+        self.all_agents = self.hierarchy.get_all_agents()
 
         self.weight_updater = AdaptiveWeightUpdater(
             learning_rate=config['learning']['learning_rate']
@@ -356,29 +355,33 @@ class HybridK1Trainer:
                 x = torch.randn(self.config['model']['input_dim'], device=device).cpu().numpy()
                 target_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
 
-            # Forward pass through K-1 system
-            # FIXED: Use soft routing to activate multiple agents (not just single path)
-            # This allows top_k selection to be meaningful (can't select 15 from only 2-3!)
-            output, routing_path = self.forward_pass.forward(x, mode='soft')
+            # SIMPLIFIED FORWARD PASS: No routing! Process all agents directly
+            # All agents process the input (parallel on GPU)
+            agent_outputs = []
+            for agent in self.all_agents:
+                try:
+                    # Each agent processes the input
+                    agent_output = agent.forward(x)
+                    if isinstance(agent_output, np.ndarray):
+                        agent_outputs.append(torch.from_numpy(agent_output).float().to(device))
+                    else:
+                        agent_outputs.append(agent_output.to(device))
+                except:
+                    # Skip if agent fails
+                    continue
+            
+            # Aggregate all agent outputs (mean)
+            if len(agent_outputs) > 0:
+                output_tensor = torch.stack(agent_outputs).mean(dim=0)
+            else:
+                # Fallback
+                output_tensor = torch.zeros(self.config['model']['output_dim'], device=device)
 
             # Compute loss
-            if isinstance(output, np.ndarray):
-                output_tensor = torch.from_numpy(output).float().to(device)
-            else:
-                output_tensor = output.to(device)
-
-            # Use cross-entropy loss for language modeling (proper objective)
             if self.output_proj is not None and target_tokens is not None:
-                # FIXED: Predict average next token instead of same for all positions
-                # This is a simplified but valid language modeling objective
-                # K-1 output represents the context, we predict "most likely next token"
+                # FIXED: Predict middle token
                 logits = self.output_proj(output_tensor)  # Shape: (vocab_size,)
-                
-                # Use middle token of sequence as prediction target
-                # This gives valid learning signal without full autoregressive complexity
                 target_token = target_tokens[len(target_tokens)//2]  # Middle token
-                
-                # Cross-entropy loss for single token prediction
                 loss_fn = nn.CrossEntropyLoss()
                 loss_tensor = loss_fn(logits.unsqueeze(0), target_token.unsqueeze(0))
                 loss = loss_tensor.item()
@@ -391,13 +394,12 @@ class HybridK1Trainer:
 
             self.loss_history.append(loss)
 
-            # HYBRID APPROACH: Compute gradients for ALL agents (like backprop)
-            activated_agents = routing_path.get_activated_agents()
-            gradients = self._compute_all_gradients_from_loss(loss_tensor, activated_agents)
+            # Compute gradients for ALL agents
+            gradients = self._compute_all_gradients_from_loss(loss_tensor, self.all_agents)
 
-            # INNOVATION: Select top-K using gradient + trust + diversity
+            # Select top-K using gradient + trust + diversity
             selected_agents = self._hybrid_selection(
-                activated_agents, gradients, step
+                self.all_agents, gradients, step
             )
 
             # Track loss improvement for trust updates
@@ -458,7 +460,7 @@ class HybridK1Trainer:
             # Validation
             if step % self.validation_interval == 0 and self.data_loader is not None:
                 val_loss, val_perplexity = validate_k1_system(
-                    self.forward_pass,
+                    self.all_agents,
                     self.data_loader,
                     embedding=self.embedding,
                     output_proj=self.output_proj,
@@ -715,7 +717,7 @@ class HybridK1Trainer:
         # Final validation
         if self.data_loader is not None:
             val_loss, val_perplexity = validate_k1_system(
-                self.forward_pass,
+                self.all_agents,
                 self.data_loader,
                 embedding=self.embedding,
                 output_proj=self.output_proj,
