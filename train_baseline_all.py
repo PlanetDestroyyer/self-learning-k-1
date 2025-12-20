@@ -22,8 +22,8 @@ print(f"Using device: {device}\n")
 # Config
 config = {
     'model': {'vocab_size': 10000, 'embed_dim': 128, 'hidden_dim': 256},
-    'training': {'learning_rate': 0.001, 'batch_size': 1},
-    'learning': {'log_interval': 5000, 'validation_interval': 5000}
+    'training': {'learning_rate': 0.001},
+    'learning': {'batch_size': 256, 'log_interval': 5000, 'validation_interval': 5000}
 }
 
 print("="*70)
@@ -38,7 +38,11 @@ print("="*70)
 data_loader1 = DataLoader(dataset_name='wikitext', vocab_size=10000, seq_length=64)
 trainer = BaselineTrainer(config, data_loader=data_loader1)
 
-max_steps1 = len(data_loader1.train_data)
+# Get number of samples (handle both list and GPU tensor formats)
+if isinstance(data_loader1.train_data, tuple):
+    max_steps1 = data_loader1.train_data[0].shape[0]
+else:
+    max_steps1 = len(data_loader1.train_data)
 print(f"Training for {max_steps1:,} steps...\n")
 results1 = trainer.train(max_steps=max_steps1)
 
@@ -63,7 +67,12 @@ print("⚠ Standard backprop may forget Dataset 1!\n")
 data_loader2 = DataLoader(dataset_name='wikitext', vocab_size=10000, seq_length=64)
 trainer.data_loader = data_loader2
 
-max_steps2 = min(10000, len(data_loader2.train_data))
+# Get number of samples (handle both list and GPU tensor formats)
+if isinstance(data_loader2.train_data, tuple):
+    num_samples2 = data_loader2.train_data[0].shape[0]
+else:
+    num_samples2 = len(data_loader2.train_data)
+max_steps2 = min(10000, num_samples2)
 print(f"Training for {max_steps2:,} steps...\n")
 results2 = trainer.train(max_steps=max_steps2)
 
@@ -86,7 +95,12 @@ print("="*70)
 data_loader3 = DataLoader(dataset_name='wikitext', vocab_size=10000, seq_length=64)
 trainer.data_loader = data_loader3
 
-max_steps3 = min(10000, len(data_loader3.train_data))
+# Get number of samples (handle both list and GPU tensor formats)
+if isinstance(data_loader3.train_data, tuple):
+    num_samples3 = data_loader3.train_data[0].shape[0]
+else:
+    num_samples3 = len(data_loader3.train_data)
+max_steps3 = min(10000, num_samples3)
 print(f"Training for {max_steps3:,} steps...\n")
 results3 = trainer.train(max_steps=max_steps3)
 
