@@ -261,8 +261,8 @@ class TransformerEncoder(nn.Module):
         # Token embedding
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         
-        # Positional encoding
-        self.pos_encoding = PositionalEncoding(embed_dim, max_seq_len, dropout)
+        # Positional encoding (max_seq_len + 1 to accommodate CLS token)
+        self.pos_encoding = PositionalEncoding(embed_dim, max_seq_len + 1, dropout)
         
         # Project to hidden dim if different
         if embed_dim != hidden_dim:

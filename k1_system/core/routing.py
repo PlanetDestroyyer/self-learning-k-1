@@ -206,17 +206,23 @@ class HierarchicalRouter:
 
                 # Compute routing scores
                 routing_scores = agent.route(output)
+                
+                # Convert to numpy if tensor
+                if hasattr(routing_scores, 'detach'):
+                    routing_scores_np = routing_scores.detach().cpu().numpy()
+                else:
+                    routing_scores_np = np.array(routing_scores)
 
                 # Get top-k children
-                if len(routing_scores) <= top_k:
-                    top_indices = np.argsort(routing_scores)[::-1]
+                if len(routing_scores_np) <= top_k:
+                    top_indices = np.argsort(routing_scores_np)[::-1]
                 else:
-                    top_indices = np.argsort(routing_scores)[::-1][:top_k]
+                    top_indices = np.argsort(routing_scores_np)[::-1][:top_k]
 
                 # Add top-k to next level
                 for idx in top_indices:
                     child = list(agent.child_agents)[idx]
-                    child_weight = weight * routing_scores[idx]
+                    child_weight = weight * float(routing_scores_np[idx])
 
                     if child_weight > 0.01:  # Only keep significant paths
                         next_level.append((child, output, child_weight))
