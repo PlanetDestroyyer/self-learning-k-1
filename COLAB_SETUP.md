@@ -23,40 +23,45 @@ if torch.cuda.is_available():
 
 ---
 
-## 🧪 Test 1: Quick Soft Routing Test (5 minutes)
+## 🧪 Test 1: Quick Architecture Test (5 minutes)
 
 ```python
-!python3 test_soft_routing.py
+!python3 test_modular_architecture.py
 ```
 
 **What this tests:**
-- Whether soft routing activates more agents (5-10 instead of 2-3)
-- Expected: Update % should jump from 4.3% to 30-50%
+- Modular transformer architecture with sparse updates
+- Data loading and vocabulary building
+- Training loop with proper autoregressive loss
 
 **Expected output:**
 ```
-✅ SUCCESS: Soft routing is working!
-   Update % jumped from 4.3% to 35.2%
+✓ If you see this, the new architecture works!
+✓ Modular Transformer with proper autoregressive loss is functional!
 ```
 
 ---
 
-## 🧪 Test 2: Full Comparison (30 minutes)
+## 🧪 Test 2: Full Training (30 minutes)
 
-If Test 1 succeeds, run the full baseline vs K-1 comparison:
+If Test 1 succeeds, run full training on datasets:
 
 ```python
-!python3 compare_baseline_vs_k1.py
+# Train K-1 on WikiText-2
+!python3 train_k1_dataset1.py
+
+# Train baseline for comparison
+!python3 train_baseline_all.py
 ```
 
 **What this does:**
-- Trains baseline for 1 epoch (57,708 steps)
-- Trains K-1 for 1 epoch with soft routing
-- Compares performance side-by-side
+- Trains K-1 for 1 epoch (57,708 steps) with sparse updates
+- Trains baseline with traditional backpropagation
+- Saves model checkpoints
 
-**Expected improvements:**
-- K-1 perplexity: 7,576 → ~800-1,200 (10x better!)
-- K-1 update %: 4.3% → 30-50%
+**Expected results:**
+- K-1 update %: ~50% (sparse updates working)
+- Both models should show decreasing perplexity
 
 ---
 
@@ -81,7 +86,7 @@ If K-1 works well, test continual learning:
 ### Watch Training in Real-Time
 ```python
 # Stream output
-!python3 test_soft_routing.py 2>&1 | tee test_output.log
+!python3 test_modular_architecture.py 2>&1 | tee test_output.log
 ```
 
 ---
@@ -112,23 +117,23 @@ sys.path.insert(0, '/content/self-learning-k-1')
 
 | Time | Test | Expected Result |
 |------|------|-----------------|
-| 5 min | Soft routing test | Update % = 30-50% ✅ |
-| 30 min | Full comparison | Perplexity < 1,200 ✅ |
-| 2 hours | Continual learning | K-1 forgets <20% vs baseline 50%+ ✅ |
+| 5 min | Architecture test | Update % = ~50%, Training completes ✅ |
+| 30 min | Full training | Models train successfully ✅ |
+| 2 hours | Continual learning | K-1 handles multiple datasets ✅ |
 
 ---
 
 ## 🎯 Success Criteria
 
 ### Minimum Viable Success
-- ✅ Soft routing increases update % to >30%
-- ✅ K-1 perplexity drops below 2,000
-- ✅ All agents participate (no starvation)
+- ✅ Sparse updates working (~50% parameter updates)
+- ✅ Data loading and vocabulary building works
+- ✅ Training completes without errors
 
 ### Stretch Goals
-- ✅ K-1 perplexity approaches baseline (~400-600)
-- ✅ Demonstrates continual learning advantage
-- ✅ Clear agent specializations identified
+- ✅ Multiple dataset training succeeds
+- ✅ Model checkpoints save correctly
+- ✅ Generation scripts produce coherent text
 
 ---
 
@@ -157,25 +162,20 @@ if torch.cuda.is_available():
 print("\n" + "="*70)
 print("🧪 RUNNING QUICK TEST (1000 steps, ~5 minutes)")
 print("="*70)
-!python3 test_soft_routing.py
+!python3 test_modular_architecture.py
 
-# 4. Check Results
-import json
-with open('test_soft_routing_results.json') as f:
-    results = json.load(f)
-    
-print(f"\n📊 Update percentage: {results['update_percentage']:.1f}%")
-if results['success']:
-    print("✅ Soft routing working! Ready for full training.")
-    
-    # Ask user if they want to continue
-    run_full = input("\nRun full training? (30 min) [y/n]: ")
-    
-    if run_full.lower() == 'y':
-        print("\n🚀 Starting full training...")
-        !python3 compare_baseline_vs_k1.py
-else:
-    print("⚠️  Soft routing needs tuning. Review test output above.")
+# 4. Full Training (optional)
+print("\n✓ Quick test complete!")
+run_full = input("\nRun full training on WikiText-2? (30 min) [y/n]: ")
+
+if run_full.lower() == 'y':
+    print("\n🚀 Starting K-1 training...")
+    !python3 train_k1_dataset1.py
+
+    print("\n🚀 Starting baseline training...")
+    !python3 train_baseline_all.py
+
+    print("\n✓ Training complete! Check models/ directory for checkpoints.")
 ```
 
 ---
