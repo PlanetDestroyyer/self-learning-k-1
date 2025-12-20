@@ -96,11 +96,31 @@ class DataLoader:
         self.val_data = sequences[n_train:n_train + n_val]
         self.test_data = sequences[n_train + n_val:]
 
-        print(f"Dataset loaded:")
-        print(f"  Train: {len(self.train_data):,} sequences")
-        print(f"  Val: {len(self.val_data):,} sequences")
-        print(f"  Test: {len(self.test_data):,} sequences")
+        # OPTIMIZATION: Convert to PyTorch tensors and move to GPU immediately
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if device.type == 'cuda':
+            print("Converting data to GPU tensors...")
+            # Stack all sequences into single tensors on GPU
+            train_x = torch.from_numpy(np.stack([s[0] for s in self.train_data])).long().to(device)
+            train_y = torch.from_numpy(np.stack([s[1] for s in self.train_data])).long().to(device)
+            self.train_data = (train_x, train_y)
+
+            val_x = torch.from_numpy(np.stack([s[0] for s in self.val_data])).long().to(device)
+            val_y = torch.from_numpy(np.stack([s[1] for s in self.val_data])).long().to(device)
+            self.val_data = (val_x, val_y)
+
+            test_x = torch.from_numpy(np.stack([s[0] for s in self.test_data])).long().to(device)
+            test_y = torch.from_numpy(np.stack([s[1] for s in self.test_data])).long().to(device)
+            self.test_data = (test_x, test_y)
+
+            print(f"✓ All data on GPU! Memory: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
+        print(f"\nDataset loaded:")
+        print(f"  Train: {train_x.shape[0] if device.type == 'cuda' else len(self.train_data):,} sequences")
+        print(f"  Val: {val_x.shape[0] if device.type == 'cuda' else len(self.val_data):,} sequences")
+        print(f"  Test: {test_x.shape[0] if device.type == 'cuda' else len(self.test_data):,} sequences")
         print(f"  Vocab: {len(self.vocab):,} words")
+        print(f"  Storage: {'GPU (fast!)' if device.type == 'cuda' else 'CPU'}")
 
     def _ensure_datasets_library(self):
         """Ensure datasets library is installed."""
@@ -359,7 +379,7 @@ class DataLoader:
                   return_tensors: str = 'np') -> Union[Tuple[np.ndarray, np.ndarray],
                                                          Tuple[torch.Tensor, torch.Tensor]]:
         """
-        Get a random batch as numpy arrays or PyTorch tensors.
+        Get a random batch - ULTRA FAST if data is on GPU!
 
         Args:
             split: 'train', 'val', or 'test'
@@ -368,7 +388,6 @@ class DataLoader:
 
         Returns:
             (batch_x, batch_y) - shapes (batch_size, seq_length)
-            If return_tensors='pt', returns torch.Tensor on GPU/CPU
         """
         if split == 'train':
             data = self.train_data
@@ -377,30 +396,36 @@ class DataLoader:
         else:
             data = self.test_data
 
+        # Check if data is already GPU tensors (tuple of 2 tensors)
+        if isinstance(data, tuple) and len(data) == 2 and isinstance(data[0], torch.Tensor):
+            # DATA IS ON GPU! Super fast path
+            data_x, data_y = data
+            n_samples = data_x.shape[0]
+            actual_batch_size = min(batch_size, n_samples)
+
+            # Random indexing directly on GPU
+            indices = torch.randint(0, n_samples, (actual_batch_size,), device=data_x.device)
+
+            # Index directly on GPU - NO CPU-GPU TRANSFER!
+            batch_x = data_x[indices]
+            batch_y = data_y[indices]
+
+            return batch_x, batch_y
+
+        # Fallback for CPU data (legacy path)
         if not data:
             raise ValueError(f"No data for split '{split}'")
 
-        # OPTIMIZED: Use random integers instead of choice for speed
         actual_batch_size = min(batch_size, len(data))
         indices = np.random.randint(0, len(data), size=actual_batch_size)
 
-        # OPTIMIZED: Stack arrays directly instead of list comprehension
         batch_x = np.stack([data[i][0] for i in indices])
         batch_y = np.stack([data[i][1] for i in indices])
 
-        # Convert to PyTorch tensors if requested
         if return_tensors == 'pt':
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            # OPTIMIZED: Create tensor on CPU first, then move to GPU (faster)
-            batch_x = torch.from_numpy(batch_x).long()
-            batch_y = torch.from_numpy(batch_y).long()
-
-            if device.type == 'cuda':
-                batch_x = batch_x.pin_memory().to(device, non_blocking=True)
-                batch_y = batch_y.pin_memory().to(device, non_blocking=True)
-            else:
-                batch_x = batch_x.to(device)
-                batch_y = batch_y.to(device)
+            batch_x = torch.from_numpy(batch_x).long().to(device)
+            batch_y = torch.from_numpy(batch_y).long().to(device)
 
         return batch_x, batch_y
 
