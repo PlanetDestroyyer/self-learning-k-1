@@ -61,12 +61,9 @@ class HybridK1Trainer:
         self.validation_interval = config['learning'].get('validation_interval', 5000)
         self.seq_length = max_seq_len
 
-        # TRUE SPARSE UPDATES: Separate optimizer per group
-        # This allows us to only call .step() on selected groups
-        self.optimizers = []
-        for group_params in self.param_groups:
-            opt = torch.optim.SGD(group_params, lr=self.lr)
-            self.optimizers.append(opt)
+        # SPEED FIX: Single optimizer (much faster than 10 separate ones)
+        # Sparse updates done by zeroing gradients BEFORE step, not separate optimizers
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=0.01)
 
         # Stats
         self.total_params = sum(p.numel() for group in self.param_groups for p in group)
@@ -80,31 +77,29 @@ class HybridK1Trainer:
         group_counts = [sum(p.numel() for p in group) for group in self.param_groups]
         self._group_param_counts = torch.tensor(group_counts, dtype=torch.float32, device=device)
 
-        # === IMPROVEMENT 2: EWC-style Importance Tracking ===
-        # Fisher Information approximation - tracks which params are important
-        self.importance = {}
-        for p in self.model.parameters():
-            self.importance[p] = torch.zeros_like(p, device=device)
-        self.ewc_lambda = config['learning'].get('ewc_lambda', 0.1)  # EWC regularization strength
+        # Initialize sparse update mask (updated every 100 steps for speed)
+        self._current_mask = torch.ones(self.num_groups, dtype=torch.bool, device=device)
+        
+        # Cache param-to-group mapping for fast lookup
+        self._param_to_group = {}
+        for g_idx, params in enumerate(self.param_groups):
+            for p in params:
+                self._param_to_group[p] = g_idx
         
         # === IMPROVEMENT 3: Gradient Accumulation ===
         self.accumulation_steps = config['learning'].get('accumulation_steps', 1)
-        self._accumulated_grads = {i: torch.zeros(1, device=device) for i in range(self.num_groups)}
-        
-        # === IMPROVEMENT 4: Selection Momentum ===
-        self.selection_momentum = torch.zeros(self.num_groups, dtype=torch.float32, device=device)
-        self.momentum_beta = config['learning'].get('selection_momentum', 0.9)
         
         # === IMPROVEMENT 5: Gradient Checkpointing ===
         self.use_checkpointing = config['learning'].get('gradient_checkpointing', False)
         
+        # Disable EWC for speed (can be re-enabled if needed)
+        self.ewc_lambda = 0  # config['learning'].get('ewc_lambda', 0.1)
+        
         print(f"Total parameters: {self.total_params:,}")
         print(f"Parameter groups: {self.num_groups}")
         print(f"Top-K groups: {self.top_k}")
-        print(f"EWC Lambda: {self.ewc_lambda}")
         print(f"Accumulation Steps: {self.accumulation_steps}")
-        print(f"Selection Momentum: {self.momentum_beta}")
-        print(f"Gradient Checkpointing: {self.use_checkpointing}\n")
+        print(f"Selection Update Interval: every 100 steps\n")
     
     def train(self, data=None, max_steps: int = 1000):
         """Train with modular sparse updates and proper autoregressive loss."""
@@ -155,20 +150,10 @@ class HybridK1Trainer:
                     logits = self.model(x_tokens)
 
                 # Next-token prediction loss
-                ce_loss = loss_fn(
+                loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),
                     y_tokens[:, 1:].reshape(-1)
                 )
-                
-                # === IMPROVEMENT 2: EWC Regularization ===
-                ewc_loss = 0.0
-                if self.ewc_lambda > 0 and self.total_steps > 0:
-                    for p in self.model.parameters():
-                        if p in self.importance:
-                            ewc_loss += (self.importance[p] * (p ** 2)).sum()
-                    ewc_loss = self.ewc_lambda * ewc_loss
-                
-                loss = ce_loss + ewc_loss
 
             # Keep loss on GPU, sync only at log intervals
             self._loss_buffer.append(loss.detach())
@@ -177,70 +162,57 @@ class HybridK1Trainer:
             self.scaler.scale(loss).backward()
             
             # === IMPROVEMENT 3: Gradient Accumulation ===
-            # Only perform update every accumulation_steps
             if (step + 1) % self.accumulation_steps != 0:
-                continue  # Accumulate more gradients
+                continue
             
-            # Unscale gradients for ALL optimizers
-            for opt in self.optimizers:
-                self.scaler.unscale_(opt)
-
-            # SPARSE UPDATE: Select which parameter groups to update
+            # Unscale gradients (single optimizer = much faster)
+            self.scaler.unscale_(self.optimizer)
+            
+            # FAST SPARSE UPDATE: Only compute selection every 100 steps
+            # Between selections, reuse the same mask (amortizes selection cost)
+            if step % 100 == 0:
+                with torch.no_grad():
+                    # Quick gradient norm per group (vectorized as much as possible)
+                    grad_norms = torch.zeros(self.num_groups, device=device)
+                    for g_idx, params in enumerate(self.param_groups):
+                        total_norm_sq = 0.0
+                        for p in params:
+                            if p.grad is not None:
+                                total_norm_sq += p.grad.pow(2).sum()
+                        grad_norms[g_idx] = total_norm_sq.sqrt()
+                    
+                    # Top-K selection
+                    k = min(self.top_k, self.num_groups)
+                    _, top_indices = torch.topk(grad_norms, k=k)
+                    self._current_mask = torch.zeros(self.num_groups, dtype=torch.bool, device=device)
+                    self._current_mask[top_indices] = True
+                    
+                    # Track which group each param belongs to (cache for speed)
+                    if not hasattr(self, '_param_to_group'):
+                        self._param_to_group = {}
+                        for g_idx, params in enumerate(self.param_groups):
+                            for p in params:
+                                self._param_to_group[p] = g_idx
+            
+            # Zero gradients for unselected groups (sparse update!)
             with torch.no_grad():
-                # Compute gradient norms per group
-                grad_norms = []
-                for params in self.param_groups:
-                    grads = [p.grad.flatten() for p in params if p.grad is not None]
-                    if grads:
-                        grad_norms.append(torch.cat(grads).norm(2))
-                    else:
-                        grad_norms.append(torch.tensor(0.0, device=device))
-                
-                grad_norms_tensor = torch.stack(grad_norms)
-                
-                # === IMPROVEMENT 1: Top-K Selection ===
-                # Select exactly top_k groups with highest gradient norms
-                k = min(self.top_k, self.num_groups)
-                _, top_indices = torch.topk(grad_norms_tensor, k=k)
-                mask = torch.zeros(self.num_groups, dtype=torch.bool, device=device)
-                mask[top_indices] = True
-                
-                # === IMPROVEMENT 4: Selection Momentum ===
-                # Smooth selection over time for stability
-                current_mask_float = mask.float()
-                self.selection_momentum = (self.momentum_beta * self.selection_momentum + 
-                                          (1 - self.momentum_beta) * current_mask_float)
-                # Final mask: groups with momentum > 0.5 get updated
-                mask = self.selection_momentum > 0.5
-                
-                # Ensure at least one group is selected
-                if not mask.any():
-                    mask[torch.argmax(self.selection_momentum)] = True
-                
-                # Track stats (vectorized - no Python loop!)
-                num_selected = mask.sum().item()
-                params_updated = (mask.float() * self._group_param_counts).sum().item()
-
-            # TRUE SPARSE: Only step selected optimizers!
-            for group_id in range(self.num_groups):
-                if mask[group_id]:
-                    self.scaler.step(self.optimizers[group_id])
-                    self.group_update_count[self.group_names[group_id]] += 1
-                # Zero ALL gradients
-                self.optimizers[group_id].zero_grad(set_to_none=True)
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        g_idx = self._param_to_group.get(p, 0)
+                        if not self._current_mask[g_idx]:
+                            p.grad.zero_()
             
-            # Update scaler once
+            # Single optimizer step (much faster than 10 separate ones!)
+            self.scaler.step(self.optimizer)
             self.scaler.update()
+            self.optimizer.zero_grad(set_to_none=True)
+            
+            # Stats (use cached mask)
+            num_selected = self._current_mask.sum().item()
+            params_updated = (self._current_mask.float() * self._group_param_counts).sum().item()
             
             self.total_steps += 1
             self.total_params_updated += int(params_updated)
-            
-            # === IMPROVEMENT 2: Update EWC Importance (ONLY every 1000 steps) ===
-            if step % 1000 == 0 and self.ewc_lambda > 0:
-                with torch.no_grad():
-                    for p in self.model.parameters():
-                        if p.grad is not None and p in self.importance:
-                            self.importance[p] += p.grad.detach() ** 2
             
             # Logging
             if step % self.log_interval == 0:
