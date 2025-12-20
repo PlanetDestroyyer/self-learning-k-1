@@ -1,11 +1,10 @@
 """
-K-1 Hybrid Trainer: Parameter Group-Based Sparse Updates
+K-1 Hybrid Trainer: Modular Sparse Updates with Autoregressive Loss
 
-Simple implementation:
-- Single network (fast!)
-- Parameters divided into groups (agents)
-- Select top-k groups by gradient magnitude
-- Update only selected groups (sparse, interpretable)
+Proper implementation:
+- Modular Transformer architecture  
+- Autoregressive next-token prediction
+- Sparse updates by gradient threshold
 """
 
 import torch
@@ -20,9 +19,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class HybridK1Trainer:
     """
-    K-1 Trainer with parameter group-based sparse updates.
-    
-   User's vision: One network, group parameters, sparse updates by gradient.
+    K-1 Trainer with modular architecture and proper autoregressive loss.
     """
     
     def __init__(self, config: Dict, data_loader=None):
@@ -34,43 +31,38 @@ class HybridK1Trainer:
         self.vocab_size = vocab_size
         
         embed_dim = config['model'].get('embed_dim', 128)
-        hidden_dim = config['model'].get('hidden_dim', 256)
-        output_dim = config['model'].get('output_dim', 128)
+        ff_dim = config['model'].get('hidden_dim', 256)
+        num_heads = config['model'].get('num_heads', 4)
+        num_layers = config['model'].get('num_layers', 4)
+        max_seq_len = config['model'].get('max_seq_len', 64)
         
-        # Create SINGLE network (not 31 separate ones!)
-        self.embedding = nn.Embedding(vocab_size, embed_dim).to(device)
-        self.network = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
+        # Create MODULAR TRANSFORMER for sparse updates
+        from ..core.modular_transformer import ModularSparseTransformer
+        self.model = ModularSparseTransformer(
+            vocab_size=vocab_size,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            ff_dim=ff_dim,
+            max_seq_len=max_seq_len,
+            dropout=0.1
         ).to(device)
-        self.output_proj = nn.Linear(output_dim, vocab_size).to(device)
         
-        print(f"Created network: {embed_dim}→{hidden_dim}→{output_dim}→{vocab_size}")
-        
-        # Partition parameters into groups
-        # Note: We have ~9 parameter tensors (embedding.weight, 6 linear layer weights/biases, output.weight)
-        # So we create groups from these tensors
-        all_params = list(self.embedding.parameters()) + list(self.network.parameters()) + list(self.output_proj.parameters())
-        
-        # Each parameter tensor becomes a group (simple approach)
-        self.param_groups = [[p] for p in all_params]
-        self.group_names = [f"agent_{i}" for i in range(len(self.param_groups))]
+        # Get parameter groups from modular architecture
+        self.param_groups = self.model.get_parameter_groups()
+        self.group_names = [f"group_{i}" for i in range(len(self.param_groups))]
         self.num_groups = len(self.param_groups)
         
-        # Config - FIXED: top_k should be less than num_groups!
+        # Config
         config_top_k = config['learning']['top_k']
-        # Adjust top_k to be ~50% of available groups
-        self.top_k = min(config_top_k, max(1, self.num_groups // 2))  # ~50% of groups
+        self.top_k = min(config_top_k, max(1, self.num_groups // 2))
         self.lr = config['learning']['learning_rate']
         self.log_interval = config['learning'].get('log_interval', 5000)
         self.validation_interval = config['learning'].get('validation_interval', 5000)
-        self.seq_length = config['model'].get('max_seq_len', 64)
+        self.seq_length = max_seq_len
         
         # Stats
-        self.total_params = sum(p.numel() for p in all_params)
+        self.total_params = sum(p.numel() for group in self.param_groups for p in group)
         self.total_params_updated = 0
         self.total_steps = 0
         self.loss_history = []
@@ -78,16 +70,16 @@ class HybridK1Trainer:
         
         print(f"Total parameters: {self.total_params:,}")
         print(f"Parameter groups: {self.num_groups}")
-        print(f"Top-K groups: {self.top_k} ({100*self.top_k/self.num_groups:.1f}%)\n")
+        print(f"Top-K groups: {self.top_k}\n")
     
     def train(self, data=None, max_steps: int = 1000):
-        """Train with parameter group sparse updates."""
+        """Train with modular sparse updates and proper autoregressive loss."""
         print("="*70)
-        print("HYBRID K-1: Gradient + Trust + Diversity Selection")
+        print("MODULAR K-1: Sparse Updates + Autoregressive Loss")
         print("="*70)
-        print("Innovation: Use REAL gradients + trust + diversity")
-        print(f"Phase 1 (0-{max_steps}): Gradient-based + exploration")
-        print(f"Data source: WikiText-2 (vocab_size={self.vocab_size})")
+        print(f"Architecture: Modular Transformer ({self.num_groups} groups)")
+        print(f"Loss: Proper autoregressive next-token prediction")
+        print(f"Training: {max_steps:,} steps")
         print("="*70 + "\n")
         
         start_time = time.time()
@@ -106,15 +98,14 @@ class HybridK1Trainer:
                 x_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
                 y_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
             
-            # Forward (SINGLE pass - FAST!)
-            x_emb = self.embedding(x_tokens)
-            x_pool = torch.mean(x_emb, dim=0)
-            hidden = self.network(x_pool)
-            logits = self.output_proj(hidden)
+            # PROPER AUTOREGRESSIVE LOSS
+            # Forward through modular transformer
+            logits = self.model(x_tokens)  # [seq_len, vocab_size]
             
-            # Loss
-            target = y_tokens[len(y_tokens)//2]
-            loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
+            # Next-token prediction: predict y_tokens from x_tokens
+            # For each position i, predict token at position i+1
+            loss = loss_fn(logits[:-1], y_tokens[1:])  # Shift by 1
+            
             self.loss_history.append(loss.item())
             
             # Backward
@@ -126,20 +117,19 @@ class HybridK1Trainer:
                 grad_norm = sum((p.grad.norm().item() ** 2 if p.grad is not None else 0) for p in params) ** 0.5
                 group_grads.append((i, grad_norm))
             
-            # SMART SELECTION: Only update groups with significant gradients (above median)
-            # This ensures we only update what's NEEDED, not arbitrary top-k
+            # SMART SELECTION: Only update groups with above-median gradients
             all_grads = [g for _, g in group_grads]
             grad_median = np.median(all_grads) if len(all_grads) > 0 else 0
-            grad_threshold = grad_median  # Update only above-median gradients
+            grad_threshold = grad_median
             
             selected = [i for i, g in group_grads if g > grad_threshold]
             
-            # Fallback: if no gradients above threshold, take top-1 at minimum
+            # Fallback
             if len(selected) == 0:
                 group_grads.sort(key=lambda x: x[1], reverse=True)
                 selected = [group_grads[0][0]]
             
-            # Update only selected groups (those that NEED it)
+            # Update only selected groups
             params_updated = 0
             for group_id in selected:
                 for p in self.param_groups[group_id]:
@@ -161,36 +151,26 @@ class HybridK1Trainer:
             if step % self.log_interval == 0:
                 elapsed = time.time() - start_time
                 update_pct = 100 * params_updated / self.total_params
-                high_trust = sum(1 for c in self.group_update_count.values() if c > step * 0.7)
-                low_trust = sum(1 for c in self.group_update_count.values() if c < step * 0.2)
                 
-                print(f"[{step:4d}] Phase 1 | Loss: {loss.item():.4f} | "
-                      f"Params updated: {params_updated:,} ({update_pct:.1f}%) | "
-                      f"Groups: {len(selected)}/{self.num_groups} | Trust (high/low): {high_trust}/{low_trust} | "
+                print(f"[{step:6d}] Loss: {loss.item():.4f} | "
+                      f"Params: {params_updated:,} ({update_pct:.1f}%) | "
+                      f"Groups: {len(selected)}/{self.num_groups} | "
                       f"Time: {elapsed:.1f}s")
             
             # Validation
             if step % self.validation_interval == 0 and self.data_loader:
                 val_loss, val_ppl = self._validate()
-                print(f"[{step:4d}] VALIDATION | Loss: {val_loss:.4f} | Perplexity: {val_ppl:.2f}")
+                print(f"[{step:6d}] VALIDATION | Loss: {val_loss:.4f} | Perplexity: {val_ppl:.2f}")
         
         # Final results
         elapsed = time.time() - start_time
         print(f"\n{'='*70}")
-        print("Hybrid K-1 Training Complete")
+        print("Training Complete")
         print(f"{'='*70}")
-        print(f"Total steps: {self.total_steps}")
-        print(f"Total parameter updates: {self.total_params_updated:,}")
-        print(f"Average params updated per step: {self.total_params_updated // self.total_steps:,} "
+        print(f"Total steps: {self.total_steps:,}")
+        print(f"Avg params updated: {self.total_params_updated // self.total_steps:,} "
               f"({100 * self.total_params_updated / (self.total_steps * self.total_params):.1f}%)")
-        
-        if self.data_loader:
-            val_loss, val_ppl = self._validate(num_batches=20)
-            print(f"\nFinal Validation:")
-            print(f"  Loss: {val_loss:.4f}")
-            print(f"  Perplexity: {val_ppl:.2f}")
-        
-        print(f"\nTime: {elapsed:.1f}s")
+        print(f"Time: {elapsed:.1f}s")
         print(f"{'='*70}\n")
         
         return {
@@ -203,25 +183,28 @@ class HybridK1Trainer:
         }
     
     def _validate(self, num_batches=10):
-        """Validation."""
+        """Validation with proper autoregressive loss."""
         total_loss, total_tokens = 0.0, 0
         loss_fn = nn.CrossEntropyLoss(reduction='sum')
         
+        self.model.eval()
         with torch.no_grad():
             for _ in range(num_batches):
                 try:
                     x_batch, y_batch = self.data_loader.get_batch('val', batch_size=8, return_tensors='pt')
+                    
                     for i in range(x_batch.shape[0]):
-                        x_emb = self.embedding(x_batch[i])
-                        x_pool = torch.mean(x_emb, dim=0)
-                        hidden = self.network(x_pool)
-                        logits = self.output_proj(hidden)
-                        target = y_batch[i][len(y_batch[i])//2]
-                        loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
+                        x_tokens = x_batch[i]
+                        y_tokens = y_batch[i]
+                        
+                        logits = self.model(x_tokens)
+                        loss = loss_fn(logits[:-1], y_tokens[1:])
+                        
                         total_loss += loss.item()
-                        total_tokens += 1
+                        total_tokens += len(y_tokens) - 1
                 except:
                     continue
         
+        self.model.train()
         avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
         return avg_loss, np.exp(min(avg_loss, 100))
