@@ -119,7 +119,10 @@ class HybridK1Trainer:
                 y_tokens[:, 1:].reshape(-1)  # [batch*(seq-1)]
             )
 
-            self.loss_history.append(loss.item())
+            # Keep loss on GPU, sync only at log intervals
+            if not hasattr(self, '_loss_buffer'):
+                self._loss_buffer = []
+            self._loss_buffer.append(loss.detach())
 
             # Backward
             loss.backward()
@@ -138,17 +141,23 @@ class HybridK1Trainer:
                 # Compute median on GPU
                 grad_threshold = torch.median(grad_norms_tensor)
 
-                # Select groups with above-median gradients (stays on GPU)
+                # Select groups with above-median gradients
                 mask = grad_norms_tensor > grad_threshold
-                selected = torch.where(mask)[0].tolist()
 
                 # Fallback: if none selected, pick the one with highest gradient
-                if len(selected) == 0:
-                    selected = [torch.argmax(grad_norms_tensor).item()]
-            
+                if not mask.any():
+                    mask[torch.argmax(grad_norms_tensor)] = True
+
+                # Convert mask to CPU once (instead of individual .item() calls)
+                mask_cpu = mask.cpu().numpy()
+
             # Update only selected groups
             params_updated = 0
-            for group_id in selected:
+            num_selected = 0
+            for group_id in range(self.num_groups):
+                if not mask_cpu[group_id]:
+                    continue
+                num_selected += 1
                 for p in self.param_groups[group_id]:
                     if p.grad is not None:
                         p.data -= self.lr * p.grad
@@ -168,6 +177,15 @@ class HybridK1Trainer:
             if step % self.log_interval == 0:
                 if device.type == 'cuda':
                     torch.cuda.synchronize()
+
+                # Sync loss buffer once (instead of every step)
+                if self._loss_buffer:
+                    avg_loss = torch.stack(self._loss_buffer).mean().item()
+                    self.loss_history.append(avg_loss)
+                    self._loss_buffer = []
+                else:
+                    avg_loss = 0.0
+
                 elapsed = time.time() - start_time
                 update_pct = 100 * params_updated / self.total_params
                 steps_per_sec = (step + 1) / elapsed if elapsed > 0 else 0
@@ -177,9 +195,9 @@ class HybridK1Trainer:
                     mem_allocated = torch.cuda.memory_allocated() / 1e9
                     gpu_mem = f" | GPU: {mem_allocated:.2f}GB"
 
-                print(f"[{step:6d}] Loss: {loss.item():.4f} | "
+                print(f"[{step:6d}] Loss: {avg_loss:.4f} | "
                       f"Params: {params_updated:,} ({update_pct:.1f}%) | "
-                      f"Groups: {len(selected)}/{self.num_groups} | "
+                      f"Groups: {num_selected}/{self.num_groups} | "
                       f"Speed: {steps_per_sec:.1f} step/s{gpu_mem}")
             
             # Validation
