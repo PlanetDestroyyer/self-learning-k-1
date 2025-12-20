@@ -39,7 +39,8 @@
     "max_total_agents": 1000,
     "max_agents_per_manager": 50,
     "max_hierarchy_depth": 6,
-    "routing_confidence_threshold": 0.5
+    "routing_confidence_threshold": 0.3,
+    "exploration_rate": 0.3
   },
   "learning": {
     "top_k": 8,

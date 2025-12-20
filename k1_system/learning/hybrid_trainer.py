@@ -358,8 +358,8 @@ class HybridK1Trainer:
                 x = torch.randn(self.config['model']['input_dim'], device=device).cpu().numpy()
                 target_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
 
-            # Forward pass through K-1 system (soft routing activates multiple agents)
-            output, routing_path = self.forward_pass.forward(x, mode='soft')
+            # Forward pass through K-1 system (hard routing for performance)
+            output, routing_path = self.forward_pass.forward(x, mode='hard')
 
             # Compute loss
             if isinstance(output, np.ndarray):
