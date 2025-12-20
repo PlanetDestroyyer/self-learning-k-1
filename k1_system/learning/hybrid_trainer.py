@@ -409,8 +409,8 @@ class HybridK1Trainer:
             self.total_params_updated += params_updated_this_step
             self.total_steps += 1
 
-            # PHASE 2: Autonomous operations
-            if self.phase_2_active and step % 200 == 0 and step > self.phase_1_duration:
+            # PHASE 2: Autonomous operations (only every 10k steps to reduce output)
+            if self.phase_2_active and step % 10000 == 0 and step > self.phase_1_duration:
                 self._autonomous_operations(step, all_agents, gradients)
 
             # Update metrics tracker
