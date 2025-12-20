@@ -31,7 +31,10 @@ env.bak/
 venv.bak/
 
 # Project Specific
-data/
+data/wikitext-2/
+data/wikitext-2-v1.zip
+data/*.npy
+data/*.pkl
 logs/
 training_comparison.png
 *.log
