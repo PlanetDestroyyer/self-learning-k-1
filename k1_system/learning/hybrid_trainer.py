@@ -60,6 +60,10 @@ class HybridK1Trainer:
         self.log_interval = config['learning'].get('log_interval', 5000)
         self.validation_interval = config['learning'].get('validation_interval', 5000)
         self.seq_length = max_seq_len
+
+        # Initialize Optimizer (Standard SGD matches the manual update logic)
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
+
         
         # Stats
         self.total_params = sum(p.numel() for group in self.param_groups for p in group)
@@ -152,23 +156,28 @@ class HybridK1Trainer:
                 mask_cpu = mask.cpu().numpy()
 
             # Update only selected groups
+            # Sparse Updates: optimized with torch.optim
             params_updated = 0
             num_selected = 0
+            
+            # 1. Nullify gradients of unselected groups (Sparse Update)
             for group_id in range(self.num_groups):
                 if not mask_cpu[group_id]:
-                    continue
-                num_selected += 1
-                for p in self.param_groups[group_id]:
-                    if p.grad is not None:
-                        p.data -= self.lr * p.grad
+                    # Inactive group: clear gradients so optimizer skips them
+                    for p in self.param_groups[group_id]:
+                        p.grad = None
+                else:
+                    # Active group: track stats
+                    num_selected += 1
+                    self.group_update_count[self.group_names[group_id]] += 1
+                    for p in self.param_groups[group_id]:
                         params_updated += p.numel()
-                self.group_update_count[self.group_names[group_id]] += 1
+
+            # 2. Optimizer step (native C++ implementation)
+            self.optimizer.step()
             
-            # Zero all gradients
-            for params in self.param_groups:
-                for p in params:
-                    if p.grad is not None:
-                        p.grad.zero_()
+            # 3. Zero gradients efficiently
+            self.optimizer.zero_grad(set_to_none=True)
             
             self.total_params_updated += params_updated
             self.total_steps += 1
