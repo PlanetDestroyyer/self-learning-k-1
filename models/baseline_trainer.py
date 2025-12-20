@@ -42,23 +42,29 @@ class BaselineTrainer:
         # Create embedding and simple transformer layers
         self.embedding = nn.Embedding(vocab_size, embed_dim).to(device)
         
-        # Simple feed-forward network (comparable to K-1 agents)
+        # Simple feed-forward network WITH DROPOUT to prevent overfitting
         self.layers = nn.Sequential(
             nn.Linear(embed_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.3),  # Prevent overfitting
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.3),  # Prevent overfitting
             nn.Linear(hidden_dim, embed_dim)
         ).to(device)
         
         # Output projection
         self.output_proj = nn.Linear(embed_dim, vocab_size).to(device)
         
-        # Optimizer
+        # Optimizer WITH WEIGHT DECAY to prevent overfitting
         all_params = list(self.embedding.parameters()) + \
                     list(self.layers.parameters()) + \
                     list(self.output_proj.parameters())
-        self.optimizer = torch.optim.Adam(all_params, lr=config.get('training', {}).get('learning_rate', 0.001))
+        self.optimizer = torch.optim.AdamW(
+            all_params, 
+            lr=config.get('training', {}).get('learning_rate', 0.001),
+            weight_decay=0.01  # L2 regularization to prevent overfitting
+        )
         
         # Count parameters
         self.total_params = sum(p.numel() for p in all_params)

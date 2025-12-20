@@ -23,34 +23,57 @@ config_path = os.path.join(project_root, 'k1_system/config/config_phase1.json')
 with open(config_path, 'r') as f:
     config = json.load(f)
 
-# Load Dataset 3: Scientific Papers
-print("="*70)
+# Load previous checkpoint to get vocabulary
+load_path = 'models/k1_dataset2.pt'
+if not os.path.exists(load_path):
+    # Try dataset1 if dataset2 doesn't exist
+    load_path = 'models/k1_dataset1.pt'
+    if not os.path.exists(load_path):
+        print(f"ERROR: Must run train_k1_dataset1.py and train_k1_dataset2.py first!")
+        sys.exit(1)
+
+print(f"Loading vocabulary from {load_path}...")
+checkpoint = torch.load(load_path, map_location=device)
+saved_vocab_size = checkpoint['vocab_size']
+print(f"✓ Loaded vocab size: {saved_vocab_size:,}")
+
+# Create vocab holder
+class VocabHolder:
+    pass
+shared_vocab = VocabHolder()
+shared_vocab.vocab = checkpoint['vocab']
+shared_vocab.word_to_idx = checkpoint['word_to_idx']
+shared_vocab.idx_to_word = checkpoint['idx_to_word']
+
+# Load Dataset 3: Scientific Papers with SHARED vocabulary
+print("\n" + "="*70)
 print("DATASET 3: Scientific Text (Domain Shift from Code)")
 print("="*70)
-print("Loading scientific papers dataset...")
+print("Loading scientific papers dataset WITH SHARED VOCABULARY...")
 
-data_loader = DataLoader(dataset_name='scientific', vocab_size=10000, seq_length=64)
+data_loader = DataLoader(
+    dataset_name='scientific', 
+    vocab_size=saved_vocab_size, 
+    seq_length=64,
+    shared_vocab=shared_vocab
+)
 
-# Get number of samples (handle both list and GPU tensor formats)
+# Get number of samples
 if isinstance(data_loader.train_data, tuple):
     num_samples = data_loader.train_data[0].shape[0]
 else:
     num_samples = len(data_loader.train_data)
 
-print(f"Train samples: {num_samples:,}\n")
+print(f"Train samples: {num_samples:,}")
+print(f"Vocab size: {data_loader.get_vocab_size():,} (shared from Dataset 1)\n")
 
 # Create trainer
 trainer = HybridK1Trainer(config, data_loader=data_loader)
 
-# Load from Dataset 2
-load_path = 'models/k1_dataset2.pt'
-if os.path.exists(load_path):
-    print(f"✓ Loading model from {load_path}")
-    checkpoint = torch.load(load_path)
-    trainer.model.load_state_dict(checkpoint['model'])
-    print("✓ Loaded! Final training on SCIENCE domain...\n")
-else:
-    print(f"⚠ No checkpoint found, training from scratch\n")
+# Load from previous checkpoint
+print(f"✓ Loading model from {load_path}")
+trainer.model.load_state_dict(checkpoint['model'])
+print("✓ Loaded! Final training on SCIENCE domain...\n")
 
 # Train
 max_steps = min(10000, num_samples)
@@ -58,13 +81,16 @@ print(f"Training for {max_steps:,} steps...\n")
 
 results = trainer.train(max_steps=max_steps)
 
-# Save final model
+# Save final model with vocab
 save_path = 'models/k1_final.pt'
 torch.save({
     'model': trainer.model.state_dict(),
     'config': config,
     'results': results,
-    'vocab_size': trainer.vocab_size
+    'vocab_size': trainer.vocab_size,
+    'vocab': data_loader.vocab,
+    'word_to_idx': data_loader.word_to_idx,
+    'idx_to_word': data_loader.idx_to_word
 }, save_path)
 
 print(f"\n✓ Final model saved to: {save_path}")

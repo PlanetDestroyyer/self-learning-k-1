@@ -55,7 +55,11 @@ torch.save({
     'model': trainer.model.state_dict(),  # Save entire model
     'config': config,
     'results': results,
-    'vocab_size': trainer.vocab_size
+    'vocab_size': trainer.vocab_size,
+    # Save vocabulary for continual learning
+    'vocab': data_loader.vocab,
+    'word_to_idx': data_loader.word_to_idx,
+    'idx_to_word': data_loader.idx_to_word
 }, save_path)
 
 print(f"\n✓ Model saved to: {save_path}")

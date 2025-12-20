@@ -47,12 +47,11 @@ def load_k1_model(checkpoint_path='models/k1_final.pt'):
     if 'model' in checkpoint:
         model.load_state_dict(checkpoint['model'])
     else:
-        # Fallback for old checkpoints (if any)
         print("Warning: Loading legacy checkpoint format not supported for modular architecture")
-        return None, vocab_size
+        return None, vocab_size, checkpoint
     
     print("✓ Model loaded!\n")
-    return model, vocab_size
+    return model, vocab_size, checkpoint
 
 
 def generate_text(prompt, model, data_loader, max_tokens=50, temperature=0.8):
@@ -114,10 +113,20 @@ if __name__ == '__main__':
         print("Run training scripts first!")
         sys.exit(1)
     
-    model, vocab_size = load_k1_model(model_path)
+    model, vocab_size, checkpoint = load_k1_model(model_path)
     
-    # Load tokenizer
-    data_loader = DataLoader(dataset_name='wikitext', vocab_size=vocab_size, seq_length=64)
+    # Load tokenizer WITH SAVED VOCABULARY from checkpoint
+    if 'vocab' in checkpoint and 'word_to_idx' in checkpoint:
+        print("Using vocabulary from checkpoint...")
+        # Create loader just to get the decode function, then override vocab
+        data_loader = DataLoader(dataset_name='wikitext', vocab_size=vocab_size, seq_length=64)
+        data_loader.vocab = checkpoint['vocab']
+        data_loader.word_to_idx = checkpoint['word_to_idx']
+        data_loader.idx_to_word = checkpoint['idx_to_word']
+        data_loader.token_to_id = data_loader.word_to_idx
+    else:
+        print("No vocab in checkpoint, using default WikiText vocab...")
+        data_loader = DataLoader(dataset_name='wikitext', vocab_size=vocab_size, seq_length=64)
     
     print("="*70)
     print("K-1 TEXT GENERATION (Modular Architecture)")

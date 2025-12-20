@@ -29,7 +29,8 @@ class DataLoader:
         dataset_name: str = 'wikitext',
         data_dir: str = 'data',
         vocab_size: int = 10000,
-        seq_length: int = 64
+        seq_length: int = 64,
+        shared_vocab: 'DataLoader' = None  # For continual learning: share vocab across datasets
     ):
         """
         Initialize data loader.
@@ -39,6 +40,7 @@ class DataLoader:
             data_dir: Directory for data storage
             vocab_size: Maximum vocabulary size
             seq_length: Sequence length for training
+            shared_vocab: Optional DataLoader to copy vocabulary from (for continual learning)
         """
         self.dataset_name = dataset_name
         self.data_dir = Path(data_dir)
@@ -52,6 +54,9 @@ class DataLoader:
         self.idx_to_word: Dict[int, str] = {}
         self.vocab: List[str] = []
         self.token_to_id = self.word_to_idx  # Alias for compatibility
+        
+        # If shared_vocab provided, copy its vocabulary
+        self._shared_vocab = shared_vocab
 
         # Data splits
         self.train_data: List[Tuple[np.ndarray, np.ndarray]] = []
@@ -80,9 +85,17 @@ class DataLoader:
             # Assume it's a file path
             text = self._load_custom(self.dataset_name)
 
-        # Build vocabulary
-        print("Building vocabulary...")
-        self._build_vocabulary(text)
+        # Build vocabulary (or use shared vocab for continual learning)
+        if self._shared_vocab is not None:
+            print("Using shared vocabulary from previous dataset...")
+            self.vocab = self._shared_vocab.vocab.copy()
+            self.word_to_idx = self._shared_vocab.word_to_idx.copy()
+            self.idx_to_word = self._shared_vocab.idx_to_word.copy()
+            self.vocab_size = len(self.vocab)
+            self.token_to_id = self.word_to_idx
+        else:
+            print("Building vocabulary...")
+            self._build_vocabulary(text)
 
         # Convert to sequences
         print("Creating sequences...")
