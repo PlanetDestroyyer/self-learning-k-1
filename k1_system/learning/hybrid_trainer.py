@@ -124,19 +124,16 @@ class HybridK1Trainer:
             # Backward
             loss.backward()
 
-            # GPU-OPTIMIZED: Calculate gradient norms staying on GPU
+            # GPU-OPTIMIZED: Calculate gradient norms directly on GPU
             with torch.no_grad():
-                grad_norms = []
-                for params in self.param_groups:
-                    if any(p.grad is not None for p in params):
-                        # Compute norm and keep on GPU
-                        norm = torch.stack([p.grad.norm() for p in params if p.grad is not None]).norm()
-                        grad_norms.append(norm)
-                    else:
-                        grad_norms.append(torch.tensor(0.0, device=device))
+                # Pre-allocate GPU tensor (no Python list!)
+                grad_norms_tensor = torch.zeros(self.num_groups, device=device)
 
-                # Stack to single tensor on GPU
-                grad_norms_tensor = torch.stack(grad_norms)
+                for i, params in enumerate(self.param_groups):
+                    if any(p.grad is not None for p in params):
+                        # Compute norm and store directly in GPU tensor
+                        norm = torch.stack([p.grad.norm() for p in params if p.grad is not None]).norm()
+                        grad_norms_tensor[i] = norm
 
                 # Compute median on GPU
                 grad_threshold = torch.median(grad_norms_tensor)
