@@ -51,6 +51,7 @@ class DataLoader:
         self.word_to_idx: Dict[str, int] = {}
         self.idx_to_word: Dict[int, str] = {}
         self.vocab: List[str] = []
+        self.token_to_id = self.word_to_idx  # Alias for compatibility
 
         # Data splits
         self.train_data: List[Tuple[np.ndarray, np.ndarray]] = []
