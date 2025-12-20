@@ -31,13 +31,27 @@ from typing import Dict, List, Tuple
 import sys
 import os
 
-# Add project root to path
-project_root = os.path.dirname(os.path.abspath(__file__))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# Add project root to path (handles both local and Colab environments)
+if '__file__' in globals():
+    project_root = os.path.dirname(os.path.abspath(__file__))
+else:
+    # Running in Jupyter/Colab - use current directory
+    project_root = os.getcwd()
+
+# Add multiple possible paths
+for path in [project_root, os.path.join(project_root, '..'), '/content/self-learning-k-1']:
+    if path not in sys.path and os.path.exists(path):
+        sys.path.insert(0, path)
+
+print(f"Project root: {project_root}")
+print(f"Python path: {sys.path[:3]}")  # Show first 3 entries
 
 # Import baseline model
-from models.baseline_gpt_pytorch import BaselineGPTPyTorch
+try:
+    from models.baseline_gpt_pytorch import BaselineGPTPyTorch
+except ImportError as e:
+    print(f"Warning: Could not import baseline model: {e}")
+    BaselineGPTPyTorch = None
 
 # Device configuration - Use GPU if available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,13 +61,20 @@ if torch.cuda.is_available():
     print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
 # Import K-1 system components
-from k1_system.core import Hierarchy, Agent, TrustSystem, HierarchicalRouter
-from k1_system.learning import ForwardPass, AdaptiveWeightUpdater
-from k1_system.initialization import HierarchyBuilder
-from k1_system.utils import TrainingLogger, MetricsTracker
-
-# Import data loader
-from data.loader import DataLoader
+try:
+    from k1_system.core import Hierarchy, Agent, TrustSystem, HierarchicalRouter
+    from k1_system.learning import ForwardPass, AdaptiveWeightUpdater
+    from k1_system.initialization import HierarchyBuilder
+    from k1_system.utils import TrainingLogger, MetricsTracker
+    from data.loader import DataLoader
+    print("✓ All imports successful")
+except ImportError as e:
+    print(f"ERROR: Failed to import K-1 components: {e}")
+    print(f"\nCurrent directory: {os.getcwd()}")
+    print(f"Directory contents: {os.listdir('.')[:10]}")
+    print(f"\nMake sure you're running from the project root directory.")
+    print(f"Try: cd /content/self-learning-k-1 && python compare_baseline_vs_k1.py")
+    sys.exit(1)
 
 
 def load_config(use_k1: bool = True) -> Dict:
