@@ -84,27 +84,35 @@ class HybridK1Trainer:
         
         start_time = time.time()
         loss_fn = nn.CrossEntropyLoss()
-        
+
+        # GPU OPTIMIZATION: Use larger batch size from config
+        batch_size = self.config.get('learning', {}).get('batch_size', 32)
+
         for step in range(max_steps):
             # Get batch
             if self.data_loader:
                 try:
-                    x_batch, y_batch = self.data_loader.get_batch('train', batch_size=1, return_tensors='pt')
-                    x_tokens, y_tokens = x_batch[0], y_batch[0]
+                    x_batch, y_batch = self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
+                    # Process entire batch, not just first element
+                    x_tokens, y_tokens = x_batch, y_batch
                 except:
-                    x_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
-                    y_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
+                    x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                    y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             else:
-                x_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
-                y_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
+                x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             
             # PROPER AUTOREGRESSIVE LOSS
             # Forward through modular transformer
-            logits = self.model(x_tokens)  # [seq_len, vocab_size]
-            
+            logits = self.model(x_tokens)  # [batch, seq_len, vocab_size]
+
             # Next-token prediction: predict y_tokens from x_tokens
             # For each position i, predict token at position i+1
-            loss = loss_fn(logits[:-1], y_tokens[1:])  # Shift by 1
+            # Reshape for CrossEntropyLoss: [batch * (seq-1), vocab] and [batch * (seq-1)]
+            loss = loss_fn(
+                logits[:, :-1].reshape(-1, self.vocab_size),  # [batch*(seq-1), vocab]
+                y_tokens[:, 1:].reshape(-1)  # [batch*(seq-1)]
+            )
             
             self.loss_history.append(loss.item())
             

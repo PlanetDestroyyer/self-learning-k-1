@@ -84,41 +84,45 @@ class BaselineTrainer:
         
         start_time = time.time()
         loss_fn = nn.CrossEntropyLoss()
-        
+
+        # GPU OPTIMIZATION: Use batch size from config
+        batch_size = self.config.get('learning', {}).get('batch_size', 32)
+
         for step in range(max_steps):
             self.optimizer.zero_grad()
-            
+
             # Get input/target data
             if self.data_loader is not None:
                 try:
-                    x_batch, y_batch = self.data_loader.get_batch('train', batch_size=1, return_tensors='pt')
-                    x_tokens = x_batch[0]  # Shape: (seq_len,)
-                    y_tokens = y_batch[0]  # Shape: (seq_len,)
+                    x_batch, y_batch = self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
+                    x_tokens = x_batch  # Shape: (batch, seq_len)
+                    y_tokens = y_batch  # Shape: (batch, seq_len)
                 except Exception as e:
                     print(f"Warning: Data loading failed: {e}")
-                    x_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
-                    y_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
+                    x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                    y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             elif data is not None:
                 # Synthetic data
                 sample_idx = np.random.randint(0, len(data))
-                x_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
-                y_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
+                x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             else:
                 # Random fallback
-                x_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
-                y_tokens = torch.randint(0, self.vocab_size, (self.seq_length,), device=device)
-            
+                x_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+                y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
+
             # Forward pass
-            x_embedded = self.embedding(x_tokens)  # (seq_len, embed_dim)
-            x_pooled = torch.mean(x_embedded, dim=0)  # (embed_dim,)
-            hidden = self.layers(x_pooled)  # (embed_dim,)
-            logits = self.output_proj(hidden)  # (vocab_size,)
+            x_embedded = self.embedding(x_tokens)  # (batch, seq_len, embed_dim)
+            x_pooled = torch.mean(x_embedded, dim=1)  # (batch, embed_dim) - pool over sequence
+            hidden = self.layers(x_pooled)  # (batch, embed_dim)
+            logits = self.output_proj(hidden)  # (batch, vocab_size)
             
-            # Expand logits to match sequence (same as K-1)
-            logits_expanded = logits.unsqueeze(0).expand(len(y_tokens), -1)
-            
-            # Cross-entropy loss (same as K-1)
-            loss = loss_fn(logits_expanded, y_tokens)
+            # Simple classification loss on first token of each sequence in batch
+            # Use first token as target (or you could use mean pooling target)
+            target = y_tokens[:, 0]  # (batch,) - first token of each sequence
+
+            # Cross-entropy loss
+            loss = loss_fn(logits, target)  # (batch, vocab) vs (batch,)
             
             # Backward pass - ALL parameters
             loss.backward()
