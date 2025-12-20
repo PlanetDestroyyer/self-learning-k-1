@@ -31,7 +31,13 @@ print("Loading scientific papers dataset...")
 
 data_loader = DataLoader(dataset_name='scientific', vocab_size=10000, seq_length=64)
 
-print(f"Train samples: {len(data_loader.train_data):,}\n")
+# Get number of samples (handle both list and GPU tensor formats)
+if isinstance(data_loader.train_data, tuple):
+    num_samples = data_loader.train_data[0].shape[0]
+else:
+    num_samples = len(data_loader.train_data)
+
+print(f"Train samples: {num_samples:,}\n")
 
 # Create trainer
 trainer = HybridK1Trainer(config, data_loader=data_loader)
@@ -47,7 +53,7 @@ else:
     print(f"⚠ No checkpoint found, training from scratch\n")
 
 # Train
-max_steps = min(10000, len(data_loader.train_data))
+max_steps = min(10000, num_samples)
 print(f"Training for {max_steps:,} steps...\n")
 
 results = trainer.train(max_steps=max_steps)

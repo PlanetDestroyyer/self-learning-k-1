@@ -31,12 +31,18 @@ print("DATASET 1: WikiText-2 (General Text)")
 print("="*70)
 data_loader = DataLoader(dataset_name='wikitext', vocab_size=10000, seq_length=64)
 
-print(f"Train samples: {len(data_loader.train_data):,}")
+# Get number of samples (handle both list and GPU tensor formats)
+if isinstance(data_loader.train_data, tuple):
+    num_samples = data_loader.train_data[0].shape[0]
+else:
+    num_samples = len(data_loader.train_data)
+
+print(f"Train samples: {num_samples:,}")
 print(f"Vocab size: {data_loader.get_vocab_size():,}\n")
 
 # Train K-1
 trainer = HybridK1Trainer(config, data_loader=data_loader)
-max_steps = len(data_loader.train_data)  # 1 epoch
+max_steps = num_samples  # 1 epoch
 
 print(f"Training for 1 epoch ({max_steps:,} steps)...\n")
 results = trainer.train(max_steps=max_steps)
