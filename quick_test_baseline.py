@@ -17,15 +17,17 @@ from data.loader import DataLoader
 
 class BaselineTransformer(nn.Module):
     """Simple baseline transformer for fair comparison."""
-    def __init__(self, vocab_size, embed_dim=128, num_heads=4, num_layers=3):
+    def __init__(self, vocab_size, embed_dim=128, num_heads=4, num_layers=3, dropout=0.2):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.pos_encoding = nn.Parameter(torch.randn(1, 512, embed_dim) * 0.02)
+        self.dropout = nn.Dropout(dropout)
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=num_heads,
             dim_feedforward=embed_dim * 4,
+            dropout=dropout,
             batch_first=True,
             norm_first=True
         )
@@ -35,6 +37,7 @@ class BaselineTransformer(nn.Module):
     def forward(self, x):
         seq_len = x.size(1)
         h = self.embedding(x) + self.pos_encoding[:, :seq_len, :]
+        h = self.dropout(h)
         h = self.transformer(h)
         return self.output_proj(h)
 
