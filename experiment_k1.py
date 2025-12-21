@@ -82,8 +82,8 @@ def main():
     config['model']['branching_factor'] = 3
     config['learning']['top_k'] = 5
 
-    # OPTIMIZATION: Increase batch size for T4 GPU speed
-    config['learning']['batch_size'] = 512  # MAXIMUM batches for speed (uses ~8GB VRAM)
+    # TEST: Reduce batch size to diagnose slowdown
+    config['learning']['batch_size'] = 64  # Was 512 - testing if large batches cause slowdown
     config['learning']['log_interval'] = 500  # Log every 500 steps for speedup verification
 
     # Enable PyTorch optimizations
