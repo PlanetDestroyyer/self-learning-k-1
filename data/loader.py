@@ -156,24 +156,23 @@ class DataLoader:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
 
-        print("Downloading Python Code dataset (code_search_net)...")
+        print("Downloading Python Code dataset (nampdn-ai/tiny-codes)...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use code_search_net - open Python code dataset from GitHub
+            # Use nampdn-ai/tiny-codes - simple dataset without loading script
             dataset = datasets.load_dataset(
-                'code_search_net',
-                'python',
+                'nampdn-ai/tiny-codes',
                 split='train',
                 streaming=True
             )
 
-            print("Fetching 5,000 Python code examples from HuggingFace...")
+            print("Fetching 5,000 Python code examples...")
             texts = []
             for i, item in enumerate(dataset):
-                if len(texts) >= 5000:
+                if i >= 5000:
                     break
-                # Get code from 'func_code_string' or 'whole_func_string'
-                code = item.get('func_code_string', '') or item.get('whole_func_string', '') or item.get('code', '')
+                # Get code from response field
+                code = item.get('response', '') or item.get('code', '') or str(item)
                 if len(code) > 100:
                     texts.append(code[:2000])
 
@@ -191,43 +190,8 @@ class DataLoader:
 
         except Exception as e:
             print(f"Download failed: {e}")
-            print("Trying alternative dataset (bigcode/the-stack-smol)...")
-            try:
-                dataset = datasets.load_dataset(
-                    'bigcode/the-stack-smol',
-                    split='train',
-                    streaming=True
-                )
-
-                print("Fetching Python code from the-stack-smol...")
-                texts = []
-                for i, item in enumerate(dataset):
-                    if len(texts) >= 5000:
-                        break
-                    # Filter for Python
-                    lang = item.get('lang', '') or item.get('language', '')
-                    if lang == 'python' or lang == 'Python':
-                        code = item.get('content', '') or item.get('code', '')
-                        if len(code) > 100:
-                            texts.append(code[:2000])
-
-                if len(texts) < 100:
-                    raise ValueError("Not enough code examples")
-
-                text = '\n\n'.join(texts)
-
-                data_dir.mkdir(parents=True, exist_ok=True)
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(text)
-
-                print(f"Successfully downloaded {len(texts)} Python code examples!")
-                return text
-
-            except Exception as e2:
-                print(f"Alternative download also failed: {e2}")
-                print("ERROR: Could not download code dataset from HuggingFace")
-                print("Please check your internet connection or try again later")
-                raise RuntimeError("Failed to download code dataset from HuggingFace")
+            print("Using synthetic python code...")
+            return self._generate_synthetic_code()
 
     def _load_scientific(self) -> str:
         """Load Scientific dataset (ArXiv)."""
