@@ -200,7 +200,8 @@ def main():
         config = json.load(f)
     
     # OPTIMIZATION: Increase batch size for T4 GPU speed
-    config['learning']['batch_size'] = 256  # MAXIMUM batches for speed (uses ~4GB VRAM)
+    # Try 256 first. If OOM, reduce to 128, then 64
+    config['learning']['batch_size'] = 256  # Start with maximum (uses ~4GB VRAM)
     config['learning']['log_interval'] = 500  # Log more frequently to see speed
 
     # Enable PyTorch optimizations
