@@ -279,9 +279,9 @@ class HierarchicalTree(nn.Module):
         self._grad_tensor = grad_tensor
         
         # COOLDOWN ENFORCEMENT: Prevent rich-get-richer
-        # Zero out gradients for nodes in cooldown period
-        COOLDOWN_STEPS = 10  # REDUCED: Faster rotation (was 100)
-        EPSILON = 0.1  # 10% random selection for exploration
+        # YOUR SOLUTION: If updated in last N times, block for next N times
+        COOLDOWN_STEPS = 50  # Stricter: Node blocked for 50 steps after update
+        EPSILON = 0.15  # 15% random selection for exploration
         cooldown_mask = torch.ones(num_nodes, device=loss_tensor.device)
         
         for idx, node in enumerate(self.all_nodes):
