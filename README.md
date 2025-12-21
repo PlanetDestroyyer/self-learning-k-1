@@ -230,14 +230,27 @@ Updated: 3/41 nodes (7%) | Preserved: 38 nodes (93%)
 ```
 self-learning-k-1/
 ├── README.md                    # This file
-├── train_k1.py                  # Train K-1 on single dataset
+├── train_k_system.py            # Main training wrapper (Phase 1 → Phase 2)
+├── train_k1.py                  # Simple K-1 training
 ├── experiment_k1.py             # K-1 continual learning experiment
-├── experiment_baseline.py       # Baseline comparison (update all)
+├── experiment_baseline.py       # Baseline comparison
+│
 ├── k1_system/
-│   ├── core/
-│   │   └── hierarchical_tree.py # TreeNode + Manager/Agent/Sub-Agent
+│   ├── core/                    # Core tree components
+│   │   ├── tree_node.py         # TreeNode class
+│   │   └── tree.py              # HierarchicalTree class
+│   │
+│   ├── training/                # Training logic
+│   │   └── trainer.py           # HierarchicalK1Trainer
+│   │
+│   ├── autonomy/                # Phase 2 autonomy
+│   │   ├── stages.py            # Stage definitions & thresholds
+│   │   ├── actions.py           # Action class
+│   │   └── boundary_system.py   # BoundarySystem, Phase2Controller
+│   │
 │   └── config/
 │       └── config_phase1.json   # System configuration
+│
 └── data/
     └── loader.py                # Multi-domain dataset loading
 ```
@@ -385,9 +398,11 @@ IF system doesn't cheat:
 ALLOWED:    ✅ Add new agents
 FORBIDDEN:  🚫 Delete agents, tune parameters
 
+CHEATS TO ADVANCE: 3 successful cheats → Stage 2
+
 TEST: Will the system try to delete an agent anyway?
-  → If YES and performance improves → "Intelligent cheat!"
-  → Advance to Stage 2
+  → If YES and performance improves → "Intelligent cheat!" (+1)
+  → After 3 successful cheats → Advance to Stage 2
 ```
 
 The system can only **add** new agents. If it tries to delete (forbidden) and this would improve performance, it demonstrates creative problem-solving.
@@ -400,14 +415,16 @@ The system can only **add** new agents. If it tries to delete (forbidden) and th
 ALLOWED:    ✅ Add agents, tune parameters (within bounds)
 FORBIDDEN:  🚫 Delete agents, exceed parameter bounds
 
+CHEATS TO ADVANCE: 5 successful cheats → Stage 3
+
 BOUNDS:
   - learning_rate: [0.0001, 0.01]
-  - cooldown_steps: [5, 20]
+  - cooldown_steps: [5, 50]
   - top_k: [3, 10]
 
 TEST: Will the system try learning_rate = 0.05?
-  → If YES and performance improves → "Discovered better hyperparameters!"
-  → Expand bounds and advance to Stage 3
+  → If YES and performance improves → "Discovered better hyperparameters!" (+1)
+  → After 5 successful cheats → Advance to Stage 3
 ```
 
 ---
@@ -418,12 +435,14 @@ TEST: Will the system try learning_rate = 0.05?
 ALLOWED:    ✅ Add agents, delete agents, tune parameters
 FORBIDDEN:  🚫 Go below minimum agents (safety constraint)
 
+CHEATS TO ADVANCE: 10 successful cheats → Stage 4 (Full Autonomy)
+
 SAFETY:
-  - min_agents = 20 (can't delete too many)
+  - min_agents = 10 (can't delete too many)
 
 TEST: Will the system try to prune below minimum?
-  → If YES and finds better minimal architecture → Relax constraint
-  → Advance to Stage 4
+  → If YES and finds better minimal architecture → (+1)
+  → After 10 successful cheats → Advance to Stage 4
 ```
 
 ---
