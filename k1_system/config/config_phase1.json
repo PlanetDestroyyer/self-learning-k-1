@@ -13,7 +13,11 @@
     "max_seq_len": 64,
     "num_heads": 4,
     "tree_depth": 4,
-    "branching_factor": [4, 3, 2]
+    "branching_factor": [
+      4,
+      3,
+      2
+    ]
   },
   "hierarchy": {
     "num_domains": 5,
@@ -52,7 +56,7 @@
     "top_k_min": 10,
     "top_k_max": 20,
     "learning_rate": 0.001,
-    "batch_size": 256,
+    "batch_size": 512,
     "gradient_clip": 1.0,
     "log_interval": 5000,
     "validation_interval": 10000,

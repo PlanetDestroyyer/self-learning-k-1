@@ -47,7 +47,7 @@ class TreeNode(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         
-        # Self-attention
+        # Self-attention (with Flash Attention if available)
         self.attn = nn.MultiheadAttention(
             embed_dim, num_heads, dropout=dropout, batch_first=True
         )
