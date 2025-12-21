@@ -151,40 +151,28 @@ class HierarchicalK1Trainer:
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
-            # Cache gradient norms ONCE (optimization) - use unwrapped model
-            self._model_unwrapped.cache_all_gradient_norms()
-            
-            # Get loss value once (avoid multiple GPU syncs)
-            loss_val = loss.item()
-
-            # Hierarchical error attribution - use unwrapped model
-            with torch.no_grad():
-                responsible_path = self._model_unwrapped.find_responsible_path(
-                    loss=loss_val,
-                    current_step=step
-                )
-                scales = self._model_unwrapped.get_proportional_scales(responsible_path)
-                self._model_unwrapped.apply_proportional_updates(scales)
+            # GPU-ACCELERATED hierarchical error attribution (replaces 5 CPU calls)
+            self._model_unwrapped.fast_hierarchical_step(loss, step)
 
             # Optimizer step
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             # Mark updated nodes for cooldown
-            self._model_unwrapped.mark_nodes_updated(scales, step)
+            if hasattr(self._model_unwrapped, '_last_scales_indices'):
+                path_indices = self._model_unwrapped._last_scales_indices
+                for idx in path_indices:
+                    self._model_unwrapped.all_nodes[idx].last_updated_step = step
 
             # Accumulate loss
             total_loss += loss.detach()
             
-            # Logging (only compute expensive things when logging)
+            # Logging (simplified for GPU-accelerated path)
             if step % self.log_interval == 0:
-                # Get grad norms from cache (already computed)
-                grad_norms = self._model_unwrapped._grad_norm_cache.copy()
-                nodes_to_update = [nid for nid, scale in scales.items() if scale > 0]
-                self._log_progress(
-                    step, total_loss, start_time, 
-                    responsible_path, scales, grad_norms, nodes_to_update
-                )
+                loss_val = loss.item()
+                elapsed = time.time() - start_time
+                speed = (step + 1) / elapsed if elapsed > 0 else 0
+                print(f"\\n[{step:6d}] Loss: {loss_val:.4f} | Speed: {speed:.1f} step/s")
         
         elapsed = time.time() - start_time
         print(f"\nTraining complete: {max_steps} steps in {elapsed:.1f}s")

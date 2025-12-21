@@ -225,6 +225,76 @@ class HierarchicalTree(nn.Module):
                 total = 0.0001
             self._grad_norm_cache[node.node_id] = total
     
+    def fast_hierarchical_step(self, loss_tensor: torch.Tensor, current_step: int):
+        """
+        GPU-ACCELERATED hierarchical error attribution.
+        
+        Combines gradient norm computation, path finding, and scale application
+        into minimal Python loops with maximum GPU tensor operations.
+        
+        Args:
+            loss_tensor: The loss tensor (still on GPU, don't call .item())
+            current_step: Current training step
+        """
+        # Compute all gradient norms as tensors (stay on GPU)
+        grad_norms = []
+        for node in self.all_nodes:
+            node_grad = torch.tensor(0.0, device=loss_tensor.device)
+            for p in node.parameters():
+                if p.grad is not None:
+                    node_grad = node_grad + p.grad.norm()
+            grad_norms.append(node_grad)
+        
+        # Stack into single tensor (GPU)
+        grad_tensor = torch.stack(grad_norms)  # [num_nodes]
+        
+        # Cache for logging (convert to dict only if needed later)
+        self._grad_tensor = grad_tensor
+        
+        # Find responsible path using GPU operations
+        # Build tree structure as indices for vectorized lookup
+        # For now, use simple max-gradient path (3 nodes: root -> middle -> leaf)
+        
+        # Root is always index 0
+        root_idx = 0
+        
+        # Level 1: children of root (indices 1, 2, 3 for branching=3)
+        level1_start = 1
+        level1_end = level1_start + len(self.root.child_nodes)
+        level1_grads = grad_tensor[level1_start:level1_end]
+        best_level1_local = level1_grads.argmax()
+        best_level1_idx = level1_start + best_level1_local.item()
+        
+        # Level 2: children of best level1 node
+        best_level1_node = self.all_nodes[best_level1_idx]
+        if best_level1_node.child_nodes:
+            # Find indices of children
+            child_indices = [self.all_nodes.index(c) for c in best_level1_node.child_nodes]
+            child_grads = grad_tensor[child_indices]
+            best_child_local = child_grads.argmax()
+            best_level2_idx = child_indices[best_child_local.item()]
+        else:
+            best_level2_idx = best_level1_idx
+        
+        # Path: [root, best_level1, best_level2]
+        path_indices = [root_idx, best_level1_idx, best_level2_idx]
+        
+        # Create scale tensor (GPU) - all zeros except path nodes
+        scales = torch.zeros(len(self.all_nodes), device=loss_tensor.device)
+        scales[path_indices[-1]] = 1.0    # Culprit: 100%
+        scales[path_indices[-2]] = 0.15   # Parent: 15%
+        scales[path_indices[0]] = 0.05    # Root: 5%
+        
+        # Apply scales to gradients (GPU operation)
+        for i, node in enumerate(self.all_nodes):
+            scale = scales[i]
+            for p in node.parameters():
+                if p.grad is not None:
+                    p.grad.mul_(scale)
+        
+        # Store for mark_nodes_updated (convert to dict only when needed)
+        self._last_scales_indices = path_indices
+    
     def _get_node_gradient_norm(self, node: TreeNode) -> float:
         """Get gradient norm for a specific node (uses cache if available)."""
         if node.node_id in self._grad_norm_cache:
