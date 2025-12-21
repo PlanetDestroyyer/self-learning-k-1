@@ -26,25 +26,32 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class BaselineTransformer(nn.Module):
     """Simple transformer baseline that updates ALL weights every step."""
-    
+
     def __init__(self, vocab_size, embed_dim=128, num_heads=4, num_layers=4, ff_dim=256, max_seq_len=64):
         super().__init__()
-        
+
         self.vocab_size = vocab_size
+        self.max_seq_len = max_seq_len
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.pos_encoding = nn.Parameter(torch.randn(max_seq_len, embed_dim) * 0.02)
-        
+
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim, nhead=num_heads, dim_feedforward=ff_dim,
             dropout=0.1, activation='gelu', batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
+
         self.output_norm = nn.LayerNorm(embed_dim)
         self.output_proj = nn.Linear(embed_dim, vocab_size)
-        
+
+        # OPTIMIZATION: Pre-compute and cache causal mask
+        self.register_buffer(
+            'causal_mask',
+            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
+        )
+
         self._init_weights()
-        
+
         total_params = sum(p.numel() for p in self.parameters())
         print(f"Baseline Transformer: {total_params:,} parameters")
     
@@ -56,10 +63,10 @@ class BaselineTransformer(nn.Module):
     def forward(self, x):
         seq_len = x.size(1)
         h = self.embedding(x) + self.pos_encoding[:seq_len].unsqueeze(0)
-        
-        # Causal mask
-        mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
-        
+
+        # Use pre-computed causal mask (MUCH faster!)
+        mask = self.causal_mask[:seq_len, :seq_len]
+
         h = self.transformer(h, mask=mask, is_causal=True)
         h = self.output_norm(h)
         logits = self.output_proj(h)
@@ -94,19 +101,22 @@ class BaselineTrainer:
     
     def train(self, max_steps=5000):
         print(f"Training Baseline (updates 100% of weights)...")
-        
+
         loss_fn = nn.CrossEntropyLoss()
         batch_size = self.config['learning'].get('batch_size', 32)
         start_time = time.time()
+        last_log_time = start_time
+        last_log_step = 0
         total_loss = 0.0
-        
+        running_loss = 0.0
+
         for step in range(max_steps):
             try:
                 x, y = self.data_loader.get_batch('train', batch_size=batch_size, return_tensors='pt')
             except:
                 x = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
                 y = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
-            
+
             self.optimizer.zero_grad()
 
             with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
@@ -115,19 +125,37 @@ class BaselineTrainer:
                     logits[:, :-1].reshape(-1, self.vocab_size),
                     y[:, 1:].reshape(-1)
                 )
-            
+
             self.scaler.scale(loss).backward()
+
+            # Gradient clipping for stability
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            
-            total_loss += loss.item()
-            
-            if step % self.log_interval == 0:
-                avg_loss = total_loss / (step + 1)
-                elapsed = time.time() - start_time
-                speed = (step + 1) / elapsed if elapsed > 0 else 0
-                print(f"[{step:6d}] Loss: {avg_loss:.4f} | Updated: 100% (all weights) | Speed: {speed:.1f} step/s")
-        
+
+            # Accumulate loss WITHOUT GPU-CPU sync (CRITICAL for speed!)
+            running_loss += loss.detach()
+
+            if step % self.log_interval == 0 and step > 0:
+                # Only sync GPU here, during logging
+                current_time = time.time()
+                elapsed_since_log = current_time - last_log_time
+                steps_since_log = step - last_log_step
+                recent_speed = steps_since_log / elapsed_since_log if elapsed_since_log > 0 else 0
+
+                # Single GPU-CPU sync per log interval
+                avg_loss = (running_loss / (step + 1)).item()
+                total_elapsed = current_time - start_time
+                overall_speed = (step + 1) / total_elapsed
+
+                print(f"[{step:6d}] Loss: {avg_loss:.4f} | Speed: {recent_speed:.1f} step/s (avg: {overall_speed:.1f})")
+
+                last_log_time = current_time
+                last_log_step = step
+
+        total_loss = running_loss.item() if isinstance(running_loss, torch.Tensor) else running_loss
         return {'loss': total_loss / max_steps, 'time': time.time() - start_time}
 
 
@@ -171,8 +199,11 @@ def main():
         config = json.load(f)
     
     # OPTIMIZATION: Increase batch size for T4 GPU speed
-    config['learning']['batch_size'] = 128  # Larger batches = faster on GPU
-    config['learning']['log_interval'] = 1000  # Log more frequently to see speed
+    config['learning']['batch_size'] = 256  # MAXIMUM batches for speed (uses ~4GB VRAM)
+    config['learning']['log_interval'] = 500  # Log more frequently to see speed
+
+    # Enable PyTorch optimizations
+    torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU
     
     # Run for 1 epoch per dataset
     

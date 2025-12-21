@@ -328,44 +328,54 @@ class HierarchicalK1Trainer:
             # Backward pass
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
-            
+
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
             # ============================================
-            # PATH-BASED SPARSE UPDATES
+            # PATH-BASED SPARSE UPDATES (OPTIMIZED)
             # ============================================
             with torch.no_grad():
-                # Get gradient norms for all nodes
-                grad_norms = self.model.get_path_gradient_norms()
-                
-                # Sort nodes by gradient norm
-                sorted_nodes = sorted(grad_norms.items(), key=lambda x: x[1], reverse=True)
-                
-                # Select top-k nodes to update
-                top_k = min(self.top_k_nodes, len(sorted_nodes))
-                nodes_to_update = set(n[0] for n in sorted_nodes[:top_k])
-                nodes_to_skip = set(n[0] for n in sorted_nodes[top_k:])
-                
+                # OPTIMIZATION: Fast gradient norm computation
+                grad_norms = {}
+                for node in self.model.all_nodes:
+                    total_norm = 0.0
+                    for p in node.parameters():
+                        if p.grad is not None:
+                            # Use GPU-optimized norm computation
+                            total_norm += p.grad.norm().item()
+                    grad_norms[node.node_id] = total_norm
+
+                # OPTIMIZATION: Use partial sort instead of full sort
+                top_k = min(self.top_k_nodes, len(grad_norms))
+                import heapq
+                top_k_nodes_ids = heapq.nlargest(top_k, grad_norms, key=grad_norms.get)
+                nodes_to_update = set(top_k_nodes_ids)
+
                 # Zero gradients for nodes NOT in top-k
                 for node in self.model.all_nodes:
-                    if node.node_id in nodes_to_skip:
+                    if node.node_id not in nodes_to_update:
                         for p in node.parameters():
                             if p.grad is not None:
                                 p.grad.zero_()
-            
+
             # Optimizer step
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            
-            total_loss += loss.item()
+
+            # Accumulate loss WITHOUT sync (CRITICAL!)
+            total_loss += loss.detach()
             
             # Logging
             if step % self.log_interval == 0:
-                avg_loss = total_loss / (step + 1)
+                # Single GPU-CPU sync per log interval
+                avg_loss = (total_loss / (step + 1)).item()
                 elapsed = time.time() - start_time
                 speed = (step + 1) / elapsed if elapsed > 0 else 0
-                
+
                 # Show which nodes were updated
                 updated_str = ",".join(str(n) for n in sorted(nodes_to_update))
-                
+
                 print(f"[{step:6d}] Loss: {avg_loss:.4f} | "
                       f"Updated: {top_k}/{len(self.model.all_nodes)} nodes | "
                       f"Nodes: [{updated_str}] | "
