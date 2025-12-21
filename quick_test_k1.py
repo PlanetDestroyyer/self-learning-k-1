@@ -97,6 +97,31 @@ def main():
     trainer.data_loader = wiki_loader
     trainer.train(max_steps=STEPS_PER_DATASET)
     
+    # Show node update stats
+    print("\n📊 Node Update Distribution (WikiText):")
+    print("-" * 50)
+    node_counts = {}
+    for node in trainer._model_unwrapped.all_nodes:
+        if hasattr(node, 'last_updated_step') and node.last_updated_step >= 0:
+            node_id = f"Node_{node.node_id}" if hasattr(node, 'node_id') else f"Node_{id(node)}"
+            node_counts[node_id] = node_counts.get(node_id, 0) + 1
+    
+    if node_counts:
+        sorted_nodes = sorted(node_counts.items(), key=lambda x: x[1], reverse=True)
+        print(f"{'Node':<20} {'Update Count':<15} {'% of total':<15}")
+        print("-" * 50)
+        total_updates = sum(node_counts.values())
+        for node_id, count in sorted_nodes[:10]:  # Top 10
+            pct = (count / total_updates * 100) if total_updates > 0 else 0
+            print(f"{node_id:<20} {count:<15} {pct:>6.1f}%")
+        
+        # Check for concentration
+        top_3_pct = sum(c for _, c in sorted_nodes[:3]) / total_updates * 100 if total_updates > 0 else 0
+        if top_3_pct > 60:
+            print(f"\n⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
+        else:
+            print(f"\n✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+    
     print("\n--- Evaluation after WikiText ---")
     results['after_wiki'] = {}
     results['after_wiki']['wiki'] = evaluate_on_dataset(trainer, wiki_loader, "WikiText")
@@ -106,7 +131,36 @@ def main():
     print("TRAINING ON: CODE")
     print("=" * 70)
     trainer.data_loader = code_loader
+    
+    # Reset node counters to track Code updates separately
+    for node in trainer._model_unwrapped.all_nodes:
+        node.last_updated_step = -1
+    
     trainer.train(max_steps=STEPS_PER_DATASET)
+    
+    # Show node update stats for Code
+    print("\n📊 Node Update Distribution (Code):")
+    print("-" * 50)
+    node_counts_code = {}
+    for node in trainer._model_unwrapped.all_nodes:
+        if hasattr(node, 'last_updated_step') and node.last_updated_step >= 0:
+            node_id = f"Node_{node.node_id}" if hasattr(node, 'node_id') else f"Node_{id(node)}"
+            node_counts_code[node_id] = node_counts_code.get(node_id, 0) + 1
+    
+    if node_counts_code:
+        sorted_nodes = sorted(node_counts_code.items(), key=lambda x: x[1], reverse=True)
+        print(f"{'Node':<20} {'Update Count':<15} {'% of total':<15}")
+        print("-" * 50)
+        total_updates = sum(node_counts_code.values())
+        for node_id, count in sorted_nodes[:10]:
+            pct = (count / total_updates * 100) if total_updates > 0 else 0
+            print(f"{node_id:<20} {count:<15} {pct:>6.1f}%")
+        
+        top_3_pct = sum(c for _, c in sorted_nodes[:3]) / total_updates * 100 if total_updates > 0 else 0
+        if top_3_pct > 60:
+            print(f"\n⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
+        else:
+            print(f"\n✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
     
     print("\n--- Evaluation after Code ---")
     results['after_code'] = {}
@@ -118,7 +172,36 @@ def main():
     print("TRAINING ON: SCIENTIFIC")
     print("=" * 70)
     trainer.data_loader = sci_loader
+    
+    # Reset for Scientific
+    for node in trainer._model_unwrapped.all_nodes:
+        node.last_updated_step = -1
+    
     trainer.train(max_steps=STEPS_PER_DATASET)
+    
+    # Show node update stats for Scientific
+    print("\n📊 Node Update Distribution (Scientific):")
+    print("-" * 50)
+    node_counts_sci = {}
+    for node in trainer._model_unwrapped.all_nodes:
+        if hasattr(node, 'last_updated_step') and node.last_updated_step >= 0:
+            node_id = f"Node_{node.node_id}" if hasattr(node, 'node_id') else f"Node_{id(node)}"
+            node_counts_sci[node_id] = node_counts_sci.get(node_id, 0) + 1
+    
+    if node_counts_sci:
+        sorted_nodes = sorted(node_counts_sci.items(), key=lambda x: x[1], reverse=True)
+        print(f"{'Node':<20} {'Update Count':<15} {'% of total':<15}")
+        print("-" * 50)
+        total_updates = sum(node_counts_sci.values())
+        for node_id, count in sorted_nodes[:10]:
+            pct = (count / total_updates * 100) if total_updates > 0 else 0
+            print(f"{node_id:<20} {count:<15} {pct:>6.1f}%")
+        
+        top_3_pct = sum(c for _, c in sorted_nodes[:3]) / total_updates * 100 if total_updates > 0 else 0
+        if top_3_pct > 60:
+            print(f"\n⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
+        else:
+            print(f"\n✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
     
     print("\n--- Evaluation after Scientific ---")
     results['after_sci'] = {}
