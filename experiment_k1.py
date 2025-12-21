@@ -46,8 +46,8 @@ def evaluate_on_dataset(trainer, data_loader, dataset_name, num_batches=50):
     with torch.no_grad():
         for _ in range(num_batches):
             try:
-                x, y = data_loader.get_batch('val', batch_size=32, return_tensors='pt')
-                logits, _ = trainer.model(x)
+                x, y = data_loader.get_batch('val', batch_size=32)
+                logits = trainer.model(x)  # Model returns logits only
                 loss = loss_fn(
                     logits[:, :-1].reshape(-1, trainer.vocab_size),
                     y[:, 1:].reshape(-1)
@@ -86,7 +86,7 @@ def main():
     # 512 was too large (3.7 step/s), 64 was fast (26 step/s)
     # 128 provides good balance between speed and throughput
     config['learning']['batch_size'] = 64
-    config['learning']['log_interval'] =500
+    config['learning']['log_interval'] = 1000
 
     # Enable PyTorch optimizations
     torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU
