@@ -84,7 +84,7 @@ def main():
 
     # OPTIMIZATION: Increase batch size for T4 GPU speed
     config['learning']['batch_size'] = 512  # MAXIMUM batches for speed (uses ~8GB VRAM)
-    config['learning']['log_interval'] = 5000  # Log every 5k steps
+    config['learning']['log_interval'] = 500  # Log every 500 steps for speedup verification
 
     # Enable PyTorch optimizations
     torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU

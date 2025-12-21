@@ -168,9 +168,9 @@ class HierarchicalK1Trainer:
             total_loss += loss.detach()
             
             # Logging (OPTIMIZED: single .item() call per interval)
-            if step % self.log_interval == 0 and step > 0:
+            if step % self.log_interval == 0:
                 # Single CPU-GPU sync point for logging
-                avg_loss = (total_loss / step).item()
+                avg_loss = (total_loss / max(step, 1)).item()  # Avoid division by zero
                 elapsed = time.time() - start_time
                 speed = step / elapsed if elapsed > 0 else 0
                 print(f"\n[{step:6d}] Loss: {avg_loss:.4f} | Speed: {speed:.1f} step/s")
