@@ -64,16 +64,25 @@ class HierarchicalK1Trainer:
             max_seq_len=max_seq_len
         ).to(device)
         
+        # Compile model for speed (PyTorch 2.0+)
+        if hasattr(torch, 'compile') and device.type == 'cuda':
+            try:
+                self.model = torch.compile(self.model, mode='reduce-overhead')
+                print("✅ torch.compile() enabled (20-40% faster)")
+            except Exception as e:
+                print(f"⚠️ torch.compile() failed: {e}")
+        
         # Training settings
         self.lr = config['learning'].get('learning_rate', 0.001)
         self.top_k_nodes = config['learning'].get('top_k', 5)
         self.log_interval = config['learning'].get('log_interval', 100)
         
-        # Optimizer
+        # Optimizer with fused kernels (faster on GPU)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), 
             lr=self.lr, 
-            weight_decay=0.01
+            weight_decay=0.01,
+            fused=True if device.type == 'cuda' else False
         )
 
         # AMP scaler
