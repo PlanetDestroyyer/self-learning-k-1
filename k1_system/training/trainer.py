@@ -64,7 +64,17 @@ class HierarchicalK1Trainer:
             max_seq_len=max_seq_len
         ).to(device)
         
-        # Compile model for speed (PyTorch 2.0+)
+        # Store reference to unwrapped model (for accessing tree nodes)
+        self._model_unwrapped = self.model
+        
+        # Multi-GPU support (Kaggle has 2 GPUs)
+        self.num_gpus = torch.cuda.device_count()
+        if self.num_gpus > 1:
+            print(f"🚀 Multi-GPU detected: {self.num_gpus} GPUs")
+            self.model = nn.DataParallel(self.model)
+            print(f"✅ DataParallel enabled (~{self.num_gpus * 0.9:.1f}x speedup)")
+        
+        # Compile model for speed (PyTorch 2.0+) - AFTER DataParallel
         if hasattr(torch, 'compile') and device.type == 'cuda':
             try:
                 self.model = torch.compile(self.model, mode='reduce-overhead')
@@ -94,7 +104,7 @@ class HierarchicalK1Trainer:
         self.seq_length = max_seq_len
         
         print(f"Total parameters: {self.total_params:,}")
-        print(f"Nodes in tree: {len(self.model.all_nodes)}")
+        print(f"Nodes in tree: {len(self._model_unwrapped.all_nodes)}")
         print(f"Top-K nodes to update: {self.top_k_nodes}")
     
     def train(self, max_steps: int = 1000) -> dict:
@@ -113,8 +123,8 @@ class HierarchicalK1Trainer:
         print(f"Device: {device}")
         if device.type == 'cuda':
             print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"Tree structure: depth={self.model.tree_depth}, "
-              f"branching={self.model.branching_factor}")
+        print(f"Tree structure: depth={self._model_unwrapped.tree_depth}, "
+              f"branching={self._model_unwrapped.branching_factor}")
         print("=" * 70)
         
         loss_fn = nn.CrossEntropyLoss()
@@ -141,27 +151,27 @@ class HierarchicalK1Trainer:
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
-            # Cache gradient norms ONCE (optimization)
-            self.model.cache_all_gradient_norms()
+            # Cache gradient norms ONCE (optimization) - use unwrapped model
+            self._model_unwrapped.cache_all_gradient_norms()
             
             # Get loss value once (avoid multiple GPU syncs)
             loss_val = loss.item()
 
-            # Hierarchical error attribution
+            # Hierarchical error attribution - use unwrapped model
             with torch.no_grad():
-                responsible_path = self.model.find_responsible_path(
+                responsible_path = self._model_unwrapped.find_responsible_path(
                     loss=loss_val,
                     current_step=step
                 )
-                scales = self.model.get_proportional_scales(responsible_path)
-                self.model.apply_proportional_updates(scales)
+                scales = self._model_unwrapped.get_proportional_scales(responsible_path)
+                self._model_unwrapped.apply_proportional_updates(scales)
 
             # Optimizer step
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             # Mark updated nodes for cooldown
-            self.model.mark_nodes_updated(scales, step)
+            self._model_unwrapped.mark_nodes_updated(scales, step)
 
             # Accumulate loss
             total_loss += loss.detach()
@@ -169,7 +179,7 @@ class HierarchicalK1Trainer:
             # Logging (only compute expensive things when logging)
             if step % self.log_interval == 0:
                 # Get grad norms from cache (already computed)
-                grad_norms = self.model._grad_norm_cache.copy()
+                grad_norms = self._model_unwrapped._grad_norm_cache.copy()
                 nodes_to_update = [nid for nid, scale in scales.items() if scale > 0]
                 self._log_progress(
                     step, total_loss, start_time, 
@@ -212,7 +222,7 @@ class HierarchicalK1Trainer:
         print(f"\n[{step:6d}] Loss: {avg_loss:.4f} | Speed: {speed:.1f} step/s")
         print("─" * 60)
         print("Hierarchical Error Attribution:")
-        self.model.print_responsibility_tree(grad_norms, scales)
+        self._model_unwrapped.print_responsibility_tree(grad_norms, scales)
 
         # Show responsible path
         path_str = " → ".join(
@@ -223,7 +233,7 @@ class HierarchicalK1Trainer:
 
         # Summary
         num_updated = len(nodes_to_update)
-        num_total = len(self.model.all_nodes)
+        num_total = len(self._model_unwrapped.all_nodes)
         pct_updated = (num_updated / num_total * 100) if num_total > 0 else 0
         print(f"Updated: {num_updated}/{num_total} nodes ({pct_updated:.0f}%) | "
               f"Preserved: {num_total - num_updated} nodes ({100-pct_updated:.0f}%)")
