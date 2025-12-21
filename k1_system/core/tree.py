@@ -278,23 +278,48 @@ class HierarchicalTree(nn.Module):
         # Cache for potential logging
         self._grad_tensor = grad_tensor
         
-        # Find responsible path (minimal CPU sync)
+        # COOLDOWN ENFORCEMENT: Prevent rich-get-richer
+        # Zero out gradients for nodes in cooldown period
+        COOLDOWN_STEPS = 100  # Node blocked for 100 steps after update
+        cooldown_mask = torch.ones(num_nodes, device=loss_tensor.device)
+        
+        for idx, node in enumerate(self.all_nodes):
+            if hasattr(node, 'last_updated_step'):
+                steps_since_update = current_step - node.last_updated_step
+                if steps_since_update < COOLDOWN_STEPS:
+                    # Node in cooldown - block it from selection!
+                    cooldown_mask[idx] = 0.0
+        
+        # Apply cooldown mask to gradients
+        grad_tensor_filtered = grad_tensor * cooldown_mask
+        
+        # Find responsible path using FILTERED gradients (respects cooldown)
         root_idx = 0
         
-        # Level 1
+        # Level 1: Select from non-cooldown nodes
         level1_start = 1
         level1_end = level1_start + len(self.root.child_nodes)
         if level1_end > level1_start:
-            best_level1_idx = level1_start + grad_tensor[level1_start:level1_end].argmax().item()
+            level1_grads = grad_tensor_filtered[level1_start:level1_end]
+            # If all nodes in cooldown, use unfiltered (fallback)
+            if level1_grads.sum() > 0:
+                best_level1_idx = level1_start + level1_grads.argmax().item()
+            else:
+                best_level1_idx = level1_start + grad_tensor[level1_start:level1_end].argmax().item()
         else:
             best_level1_idx = root_idx
         
-        # Level 2
+        # Level 2: Select from non-cooldown children
         best_level1_node = self.all_nodes[best_level1_idx]
         if best_level1_node.child_nodes:
             child_indices = [self.node_to_idx[c] for c in best_level1_node.child_nodes]
             child_indices_tensor = torch.tensor(child_indices, device=loss_tensor.device)
-            best_child_local = grad_tensor[child_indices_tensor].argmax().item()
+            child_grads_filtered = grad_tensor_filtered[child_indices_tensor]
+            # If all children in cooldown, use unfiltered (fallback)
+            if child_grads_filtered.sum() > 0:
+                best_child_local = child_grads_filtered.argmax().item()
+            else:
+                best_child_local = grad_tensor[child_indices_tensor].argmax().item()
             best_level2_idx = child_indices[best_child_local]
         else:
             best_level2_idx = best_level1_idx
