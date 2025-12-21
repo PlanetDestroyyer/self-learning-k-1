@@ -68,8 +68,10 @@ class HierarchicalK1Trainer:
         self._model_unwrapped = self.model
         
         # Multi-GPU support (Kaggle has 2 GPUs)
+        # TEMPORARILY DISABLED: Testing if DataParallel overhead is causing slowdown
+        # Small models on DataParallel can be SLOWER due to communication overhead
         self.num_gpus = torch.cuda.device_count()
-        if self.num_gpus > 1:
+        if False and self.num_gpus > 1:
             print(f"🚀 Multi-GPU detected: {self.num_gpus} GPUs")
             self.model = nn.DataParallel(self.model)
             print(f"✅ DataParallel enabled (~{self.num_gpus * 0.9:.1f}x speedup)")
