@@ -50,7 +50,7 @@ class TreeNode(nn.Module):
         
         # Router to children (if not leaf)
         self.router = None  # Set by parent
-        self.child_nodes: List['TreeNode'] = []  # Renamed to avoid PyTorch conflict
+        self.child_nodes = nn.ModuleList()  # CRITICAL: Must be ModuleList for device transfer!
         self.is_leaf = True
         
         # For tracking

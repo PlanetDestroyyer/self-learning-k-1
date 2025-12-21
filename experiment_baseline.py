@@ -206,8 +206,15 @@ def main():
 
     # Enable PyTorch optimizations
     torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU
-    torch.backends.cuda.matmul.allow_tf32 = True  # Enable TensorFloat32
-    torch.backends.cudnn.allow_tf32 = True
+
+    # Use new TF32 API (PyTorch 2.9+)
+    try:
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    except AttributeError:
+        # Fallback for older PyTorch
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     print(f"🔍 DEBUG: Batch size set to {config['learning']['batch_size']}")
     print(f"🔍 DEBUG: CuDNN benchmark: {torch.backends.cudnn.benchmark}")

@@ -88,7 +88,16 @@ def main():
 
     # Enable PyTorch optimizations
     torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU
-    
+
+    # Use new TF32 API (PyTorch 2.9+)
+    try:
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    except AttributeError:
+        # Fallback for older PyTorch
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     # Run for 1 epoch per dataset (steps = num_train_samples)
     
     # Load all datasets

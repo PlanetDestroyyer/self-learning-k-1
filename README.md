@@ -31,22 +31,37 @@ Error occurs → Update ALL 3 million parameters → Hope it works
 ### The Hierarchical Structure:
 
 ```
-                    MANAGER (Root)
-                    "Oversees everything"
+                    [ROOT - Hidden]
+                    "Overall coordinator"
                          |
-         ┌───────────────┼───────────────┐
-         |               |               |
-      AGENT 1         AGENT 2         AGENT 3
-   "Specialist A"  "Specialist B"  "Specialist C"
-         |               |               |
-    ┌────┼────┐     ┌────┼────┐    ┌────┼────┐
-   S1   S2   S3    S4   S5   S6   S7   S8   S9
-   SUB-AGENTS (Actual workers)
+         ┌───────────────┼───────────────┬───────────────┐
+         |               |               |               |
+      NODE 1          NODE 2          NODE 3          NODE 4
+   "Processor A"   "Processor B"   "Processor C"   "Processor D"
+         |               |               |               |
+    ┌────┼────┬─┐   ┌────┼────┬─┐   ┌────┼────┬─┐   ┌────┼────┬─┐
+   A1   A2   A3 A4  A1   A2   A3 A4  A1   A2   A3 A4  A1   A2   A3 A4
+   "Agents (Specialists)"
+    |    |    |  |   |    |    |  |   |    |    |  |   |    |    |  |
+   └┬┘  └┬┘  └┬┘└┬┘ └┬┘  └┬┘  └┬┘└┬┘ └┬┘  └┬┘  └┬┘└┬┘ └┬┘  └┬┘  └┬┘└┬┘
+   S1-2 S1-2 S1-2... (1-3 Sub-Agents per Agent)
+   SUB-AGENTS (Fine-grained workers)
 ```
 
+**Structure Details:**
+- **Root (1):** Hidden coordinator, provides context
+- **Nodes (4):** Top-level processors `[Node 1, Node 2, Node 3, Node 4]`
+- **Agents (3-4 per Node):** Specialized units within each Node
+- **Sub-Agents (1-3 per Agent):** Fine-grained workers
+
+**Total Components:**
+- 1 Root + 4 Nodes + ~12-16 Agents + ~24-48 Sub-Agents = **~41-69 nodes**
+- Current default: `1 + 4 + 12 + 24 = 41 nodes`
+
 Each level is a **set of parameters** (mini-neural network):
-- **Manager:** Overall coordinator, sees big picture
-- **Agents:** Specialized processors for different features
+- **Root:** Overall coordinator, sees big picture (hidden from user)
+- **Nodes:** Top-level processors for different feature types
+- **Agents:** Specialized processors within each Node
 - **Sub-Agents:** Fine-grained workers doing specific tasks
 
 ---
@@ -62,35 +77,41 @@ Loss is high → Something broke!
 ### **Step 2: Compute Responsibility (Gradients)**
 ```python
 Backward pass computes gradients for ALL nodes:
-  Manager:     grad = 0.30
-  Agent 1:     grad = 0.05  ✓ Low gradient → Working fine
-  Agent 2:     grad = 0.45  ⚠️ High gradient → Something wrong here!
-  Agent 3:     grad = 0.08  ✓ Low gradient → OK
-    Sub-Agent 4:  grad = 0.10
-    Sub-Agent 5:  grad = 0.52  🚨 CULPRIT! Highest gradient!
-    Sub-Agent 6:  grad = 0.12
+  Root:        grad = 0.30
+  Node 1:      grad = 0.05  ✓ Low gradient → Working fine
+  Node 2:      grad = 0.45  ⚠️ High gradient → Something wrong here!
+  Node 3:      grad = 0.08  ✓ Low gradient → OK
+  Node 4:      grad = 0.07  ✓ Low gradient → OK
+    Agent 4:       grad = 0.10
+    Agent 5:       grad = 0.14
+    Agent 6:       grad = 0.48  ⚠️ High in Node 2!
+      Sub-Agent 12:  grad = 0.12
+      Sub-Agent 13:  grad = 0.52  🚨 CULPRIT! Highest gradient!
+      Sub-Agent 14:  grad = 0.11
 ```
 
 **High gradient = Responsible for error = Needs fixing!**
 
 ### **Step 3: Hierarchical Drill-Down**
 ```
-1. Manager: "I see an error"
-2. Check Agents: "Agent 2 has high gradient"
-3. Drill into Agent 2: "Sub-Agent 5 is the culprit!"
-4. Attribution: "Sub-Agent 5 in Agent 2 caused the error"
+1. Root: "I see an error"
+2. Check Nodes: "Node 2 has high gradient"
+3. Drill into Node 2 → Check Agents: "Agent 6 has high gradient"
+4. Drill into Agent 6 → Check Sub-Agents: "Sub-Agent 13 is the culprit!"
+5. Attribution: "Node 2 → Agent 6 → Sub-Agent 13 caused the error"
 ```
 
 ### **Step 4: Proportional Updates**
 ```
 Update based on responsibility level:
-  Sub-Agent 5: 80% update  (most responsible!)
-  Agent 2:     15% update  (parent oversight)
-  Manager:      5% update  (top-level context)
-  Other agents: 0% update  (not involved, skip!)
+  Sub-Agent 13: 100% update  (most responsible - the culprit!)
+  Agent 6:       15% update  (parent - oversight needed)
+  Node 2:         5% update  (top-level - context awareness)
+  Root:           5% update  (global - minimal adjustment)
+  Other nodes:    0% update  (not involved, skip!)
 
-Result: Update ~3/13 components (23%)
-        Preserve 77% of working parameters!
+Result: Update ~3-4/41 components (7-10%)
+        Preserve 90-93% of working parameters!
 ```
 
 ---
@@ -107,9 +128,9 @@ Result: Update ~3/13 components (23%)
 
 ### After (K-1):
 ```
-✅ Error? Trace to Sub-Agent 5 in Agent 2
-✅ "Sub-Agent 5 is underperforming on feature X"
-✅ Can debug specific component
+✅ Error? Trace to Node 2 → Agent 6 → Sub-Agent 13
+✅ "Sub-Agent 13 in Agent 6 of Node 2 is underperforming on feature X"
+✅ Can debug specific component at any level
 ✅ Transparent, interpretable system
 ```
 
@@ -132,9 +153,11 @@ While **interpretability** is the PRIMARY goal, K-1 also provides:
 ### 3. **Debugging & Monitoring**
 ```python
 # Can trace exactly which component failed
-print("Error in Agent 2 → Sub-Agent 5")
+print("Error Path: Node 2 → Agent 6 → Sub-Agent 13")
 print("Gradient: 0.52 (culprit!)")
-print("Updating with 80% learning rate")
+print("Updating Sub-Agent 13 with 100% learning rate")
+print("Updating Agent 6 with 15% learning rate")
+print("Updating Node 2 with 5% learning rate")
 ```
 
 ### 4. **Modular Improvements**
@@ -179,8 +202,26 @@ After each dataset, we evaluate on ALL previous datasets.
 | **Baseline** | Traditional backprop | ❌ Black box | 100% params updated |
 
 **Expected Results:**
-- K-1: Can identify "Agent X → Sub-Agent Y caused error"
+- K-1: Can identify "Node X → Agent Y → Sub-Agent Z caused error"
 - Baseline: "Something broke" (no details)
+
+**Interpretability Output Example:**
+```
+[500] Loss: 5.93 | Speed: 145 step/s
+────────────────────────────────────────────────────────────
+Hierarchical Error Attribution:
+✓ Root    0: grad=0.287, update=  5%
+  ✓ Node    1: grad=0.053, update=  0%
+  ⚠️ Node    2: grad=0.412, update=  5%
+    ✓ Agent   4: grad=0.098, update=  0%
+    ⚠️ Agent   6: grad=0.487, update= 15%
+      ✓ SubAgent 12: grad=0.215, update=  0%
+      🚨 SubAgent 13: grad=0.524, update=100%  ← CULPRIT!
+  ✓ Node    3: grad=0.076, update=  0%
+
+Error Path: Root(g=0.29) → Node2(g=0.41) → Agent6(g=0.49) → SubAgent13(g=0.52)
+Updated: 3/41 nodes (7%) | Preserved: 38 nodes (93%)
+```
 
 ---
 
@@ -209,22 +250,27 @@ self-learning-k-1/
 {
   "model": {
     "embed_dim": 128,
-    "tree_depth": 3,          // Manager → Agents → Sub-Agents
-    "branching_factor": 3     // 3 children per parent
+    "tree_depth": 4,          // Root → Nodes → Agents → Sub-Agents
+    "branching_factor": [4, 3, 2]  // 4 Nodes, 3 Agents, 2 Sub-Agents
   },
   "learning": {
-    "top_k": 5,               // Update top-5 responsible nodes
     "learning_rate": 0.001,
     "batch_size": 256
   }
 }
 ```
 
-**Tree Structure Example (depth=3, branching=3):**
-- 1 Manager
-- 3 Agents (level 1)
-- 9 Sub-Agents (level 2)
-- **Total: 13 nodes**
+**Tree Structure Example (depth=4, branching=[4,3,2]):**
+- 1 Root (hidden)
+- 4 Nodes (level 1)
+- 12 Agents (level 2, 3 per Node)
+- 24 Sub-Agents (level 3, 2 per Agent)
+- **Total: 41 nodes**
+
+**Variable Branching:**
+- Root → Nodes: 4 children
+- Nodes → Agents: 3 children each
+- Agents → Sub-Agents: 2 children each
 
 ---
 
@@ -233,10 +279,11 @@ self-learning-k-1/
 | Aspect | Traditional Backprop | K-1 System |
 |--------|---------------------|-----------|
 | **Interpretability** | ❌ Black box | ✅ Full error attribution |
-| **Debugging** | ❌ "Something broke" | ✅ "Agent 2 → Sub-Agent 5" |
-| **Parameters Updated** | ❌ 100% (wasteful) | ✅ ~25-40% (efficient) |
-| **Transparency** | ❌ None | ✅ Know who's responsible |
-| **Modularity** | ❌ Monolithic | ✅ Hierarchical components |
+| **Debugging** | ❌ "Something broke" | ✅ "Node 2 → Agent 6 → Sub-Agent 13" |
+| **Parameters Updated** | ❌ 100% (wasteful) | ✅ ~7-10% (highly efficient) |
+| **Update Distribution** | ❌ All equal | ✅ Proportional: 100%/15%/5% |
+| **Transparency** | ❌ None | ✅ Know exact responsible path |
+| **Modularity** | ❌ Monolithic | ✅ 4-level hierarchy |
 | **Explainability** | ❌ Zero | ✅ Path tracking + gradients |
 
 ---
@@ -250,38 +297,45 @@ loss.backward()
 
 # K-1 analyzes gradients hierarchically:
 Gradient Analysis:
-  Manager (Root):    0.30  → Update 5%
-  Agent 1:           0.05  → Skip (working fine)
-  Agent 2:           0.45  → Update 15%
-    └─ Sub-Agent 4:  0.10  → Skip
-    └─ Sub-Agent 5:  0.52  → Update 80% (CULPRIT!)
-    └─ Sub-Agent 6:  0.12  → Skip
-  Agent 3:           0.08  → Skip
+  Root:              0.30  → Update 5%
+  ├─ Node 1:         0.05  → Skip (working fine)
+  ├─ Node 2:         0.45  → Update 5%
+  │   ├─ Agent 4:    0.10  → Skip
+  │   ├─ Agent 5:    0.14  → Skip
+  │   └─ Agent 6:    0.48  → Update 15%
+  │       ├─ Sub-Agent 12: 0.12  → Skip
+  │       ├─ Sub-Agent 13: 0.52  → Update 100% (CULPRIT!)
+  │       └─ Sub-Agent 14: 0.11  → Skip
+  ├─ Node 3:         0.08  → Skip
+  └─ Node 4:         0.07  → Skip
 
 Result:
-✅ Identified: "Sub-Agent 5 in Agent 2 is underperforming"
-✅ Updated: 3/13 nodes (23%)
-✅ Preserved: 10/13 nodes (77%) working fine
-✅ Interpretable: Full path and responsibility known
+✅ Identified: "Node 2 → Agent 6 → Sub-Agent 13 is underperforming"
+✅ Updated: 3/41 nodes (7%) with proportional scaling
+✅ Preserved: 38/41 nodes (93%) working fine
+✅ Interpretable: Full hierarchical path and responsibility known
 ```
 
 ---
 
 ## 🔬 Current Implementation Status
 
-### ✅ Implemented:
-- [x] Hierarchical tree structure (Manager → Agents → Sub-Agents)
+### ✅ Fully Implemented:
+- [x] Hierarchical tree structure (Root → Nodes → Agents → Sub-Agents)
+- [x] Variable branching (4 Nodes, 3 Agents, 2 Sub-Agents)
 - [x] Gradient-based error detection
-- [x] Selective parameter updates (top-K)
-- [x] Basic interpretability (shows which nodes updated)
-- [x] Efficient training (skip unnecessary updates)
+- [x] **Hierarchical drilling** (Root → Node X → Agent Y → Sub-Agent Z)
+- [x] **Proportional updates** (100% culprit, 15% parent, 5% grandparent)
+- [x] **Full interpretability** (visual tree + error path)
+- [x] Efficient training (only ~7% of nodes updated)
+- [x] Responsibility visualization (tree with icons and percentages)
 
-### 🚧 Planned (Full Idea):
-- [ ] Proportional updates (80% culprit, 15% parent, 5% manager)
-- [ ] Hierarchical drilling (start from manager, drill down)
-- [ ] Responsibility visualization (path diagrams)
+### 🚧 Future Enhancements:
+- [ ] Named agents (instead of numeric IDs)
+- [ ] Gradient flow tracking (edge visualization)
 - [ ] Automated debugging tools
 - [ ] Dynamic agent addition/removal
+- [ ] Specialization analysis (what each agent learns)
 
 ---
 
@@ -289,11 +343,13 @@ Result:
 
 This system opens up several research questions:
 
-1. **Optimal Hierarchy Depth:** How many levels? (current: 3)
-2. **Update Proportions:** What's best ratio? (80/15/5? 90/7/3?)
-3. **Gradient Thresholds:** When is a gradient "high enough"?
-4. **Specialization:** Do agents specialize in different features?
-5. **Scalability:** Does this work for 1B+ parameter models?
+1. **Optimal Hierarchy Depth:** How many levels? (current: 4 - Root/Nodes/Agents/Sub-Agents)
+2. **Optimal Branching:** How many children? (current: [4, 3, 2])
+3. **Update Proportions:** What's best ratio? (current: 100/15/5, optimal: ?)
+4. **Gradient Thresholds:** When is a gradient "high enough"?
+5. **Specialization:** Do Nodes/Agents/Sub-Agents specialize in different features?
+6. **Scalability:** Does this work for 1B+ parameter models?
+7. **Interpretability vs. Accuracy:** Trade-off between transparency and performance?
 
 ---
 
@@ -308,7 +364,7 @@ MIT License
 **"Neural networks don't have to be black boxes. With hierarchical error attribution, we can KNOW what broke and FIX just that."**
 
 Traditional AI: "It's magic, we don't know how it works"
-K-1 System: "Sub-Agent 5 caused error X because of feature Y"
+K-1 System: "Node 2 → Agent 6 → Sub-Agent 13 caused error X because of feature Y"
 
 **Transparency > Opacity**
 **Interpretability > Black Box**
