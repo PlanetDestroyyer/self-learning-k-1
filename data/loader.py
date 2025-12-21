@@ -148,45 +148,86 @@ class DataLoader:
             return datasets
 
     def _load_code_python(self) -> str:
-        """Load Python code dataset."""
+        """Load Python code dataset from HuggingFace."""
         data_dir = self.data_dir / 'code_python'
         file_path = data_dir / 'train.txt'
-        
+
         if file_path.exists():
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
-                
-        print("Downloading Python Code dataset (nampdn-ai/tiny-codes)...")
+
+        print("Downloading Python Code dataset (code_search_net)...")
         try:
             datasets = self._ensure_datasets_library()
-            # Use nampdn-ai/tiny-codes - simple dataset without loading script
+            # Use code_search_net - open Python code dataset from GitHub
             dataset = datasets.load_dataset(
-                'nampdn-ai/tiny-codes', 
+                'code_search_net',
+                'python',
                 split='train',
                 streaming=True
             )
-            
-            print("Fetching 5,000 Python code examples...")
+
+            print("Fetching 5,000 Python code examples from HuggingFace...")
             texts = []
             for i, item in enumerate(dataset):
-                if i >= 5000: break
-                # Get code from response field
-                code = item.get('response', '') or item.get('code', '') or str(item)
+                if len(texts) >= 5000:
+                    break
+                # Get code from 'func_code_string' or 'whole_func_string'
+                code = item.get('func_code_string', '') or item.get('whole_func_string', '') or item.get('code', '')
                 if len(code) > 100:
                     texts.append(code[:2000])
-            
+
+            if len(texts) < 100:
+                raise ValueError("Not enough code examples downloaded")
+
             text = '\n\n'.join(texts)
-            
-            data_dir.mkdir(exist_ok=True)
+
+            data_dir.mkdir(parents=True, exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(text)
-                
+
+            print(f"Successfully downloaded {len(texts)} Python code examples!")
             return text
-            
+
         except Exception as e:
             print(f"Download failed: {e}")
-            print("Using synthetic python code...")
-            return self._generate_synthetic_code()
+            print("Trying alternative dataset (bigcode/the-stack-smol)...")
+            try:
+                dataset = datasets.load_dataset(
+                    'bigcode/the-stack-smol',
+                    split='train',
+                    streaming=True
+                )
+
+                print("Fetching Python code from the-stack-smol...")
+                texts = []
+                for i, item in enumerate(dataset):
+                    if len(texts) >= 5000:
+                        break
+                    # Filter for Python
+                    lang = item.get('lang', '') or item.get('language', '')
+                    if lang == 'python' or lang == 'Python':
+                        code = item.get('content', '') or item.get('code', '')
+                        if len(code) > 100:
+                            texts.append(code[:2000])
+
+                if len(texts) < 100:
+                    raise ValueError("Not enough code examples")
+
+                text = '\n\n'.join(texts)
+
+                data_dir.mkdir(parents=True, exist_ok=True)
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(text)
+
+                print(f"Successfully downloaded {len(texts)} Python code examples!")
+                return text
+
+            except Exception as e2:
+                print(f"Alternative download also failed: {e2}")
+                print("ERROR: Could not download code dataset from HuggingFace")
+                print("Please check your internet connection or try again later")
+                raise RuntimeError("Failed to download code dataset from HuggingFace")
 
     def _load_scientific(self) -> str:
         """Load Scientific dataset (ArXiv)."""
@@ -229,21 +270,102 @@ class DataLoader:
             return self._generate_synthetic_scientific()
 
     def _generate_synthetic_code(self) -> str:
-        """Generate synthetic Python code if download fails."""
+        """Generate realistic synthetic Python code if download fails."""
+        import random
+
+        # More realistic Python code templates
         templates = [
-            "def {func}({arg}):\n    return {arg} + 1",
-            "class {class_name}:\n    def __init__(self):\n        self.x = 0",
-            "if {var} > 0:\n    print('Hello World')",
-            "for i in range(10):\n    print(i)"
+            # Function definitions
+            """def {func}({args}):
+    \"\"\"Calculate {description}.\"\"\"
+    result = {expr}
+    return result
+""",
+            # Class definitions
+            """class {class_name}:
+    \"\"\"A class to handle {description}.\"\"\"
+
+    def __init__(self, {args}):
+        self.{attr} = {args}
+        self.{attr2} = []
+
+    def {method}(self, value):
+        self.{attr2}.append(value)
+        return len(self.{attr2})
+""",
+            # Data processing
+            """def process_{data_type}(data):
+    \"\"\"Process {data_type} data.\"\"\"
+    results = []
+    for item in data:
+        if item.{attr} > 0:
+            results.append(item.{method}())
+    return results
+""",
+            # Error handling
+            """try:
+    result = {func}({args})
+    print(f"Success: {{result}}")
+except {exception} as e:
+    print(f"Error: {{e}}")
+    result = None
+""",
+            # List comprehensions
+            """data = [{expr} for {var} in range({num})]
+filtered = [x for x in data if x > {threshold}]
+result = sum(filtered)
+""",
+            # Dictionary operations
+            """config = {{
+    '{key1}': {value1},
+    '{key2}': '{value2}',
+    '{key3}': [{expr} for i in range(5)]
+}}
+""",
+            # API-like function
+            """def fetch_{resource}(id):
+    \"\"\"Fetch {resource} by ID.\"\"\"
+    url = f"api/{{id}}/{resource}"
+    response = request.get(url)
+    return response.json()
+""",
         ]
-        words = ["main", "process", "data", "value", "Manager", "System"]
-        
+
+        # Vocabulary for code generation
+        funcs = ['calculate', 'process', 'handle', 'parse', 'validate', 'transform', 'filter', 'sort']
+        classes = ['DataProcessor', 'ConfigManager', 'ModelTrainer', 'FileHandler', 'APIClient', 'Cache', 'Parser']
+        attrs = ['value', 'data', 'config', 'result', 'items', 'count', 'status']
+        methods = ['get_value', 'process', 'update', 'validate', 'compute', 'transform']
+        data_types = ['user', 'file', 'config', 'model', 'request', 'response']
+        args_list = ['x', 'data', 'value', 'config', 'items']
+        exceptions = ['ValueError', 'TypeError', 'KeyError', 'RuntimeError']
+
         text = []
         for _ in range(5000):
-            import random
-            t = random.choice(templates)
-            w = random.choice(words)
-            text.append(t.format(func=w.lower(), arg="x", class_name=w, var="count"))
+            template = random.choice(templates)
+            code = template.format(
+                func=random.choice(funcs),
+                class_name=random.choice(classes),
+                attr=random.choice(attrs),
+                attr2=random.choice(attrs),
+                method=random.choice(methods),
+                data_type=random.choice(data_types),
+                args=random.choice(args_list),
+                description=f"{random.choice(data_types)} {random.choice(['processing', 'handling', 'validation'])}",
+                expr=f"{random.choice(args_list)} * {random.randint(1, 10)}",
+                exception=random.choice(exceptions),
+                var='i',
+                num=random.randint(10, 100),
+                threshold=random.randint(10, 50),
+                key1=random.choice(['host', 'port', 'timeout', 'debug']),
+                key2=random.choice(['name', 'version', 'env', 'mode']),
+                key3=random.choice(['options', 'features', 'plugins']),
+                value1=random.randint(1000, 9999),
+                value2=random.choice(['production', 'development', 'test']),
+                resource=random.choice(data_types)
+            )
+            text.append(code)
+
         return "\n\n".join(text)
 
     def _generate_synthetic_scientific(self) -> str:

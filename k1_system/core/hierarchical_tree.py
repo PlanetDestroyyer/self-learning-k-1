@@ -272,9 +272,9 @@ class HierarchicalK1Trainer:
         
         # Optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=0.01)
-        
+
         # AMP
-        self.scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+        self.scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
         
         # Stats
         self.total_params = sum(p.numel() for p in self.model.parameters())
@@ -317,8 +317,8 @@ class HierarchicalK1Trainer:
             
             # Forward pass
             self.optimizer.zero_grad()
-            
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+
+            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
                 logits, path = self.model(x)
                 loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),

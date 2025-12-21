@@ -72,9 +72,9 @@ class BaselineTrainer:
         self.total_params_updated = 0
         self.total_steps = 0
         self.loss_history = []
-        
+
         # AMP for speed
-        self.scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+        self.scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
         
         print(f"\n" + "="*70)
         print("BASELINE: Same Architecture, Dense Updates")
@@ -113,7 +113,7 @@ class BaselineTrainer:
                 y_tokens = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             
             # Forward with AMP
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
                 logits = self.model(x_tokens)
                 loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),
@@ -172,7 +172,7 @@ class BaselineTrainer:
         
         with torch.no_grad():
             x, y = self.data_loader.get_batch('val', batch_size=32, return_tensors='pt')
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
                 logits = self.model(x)
                 loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),

@@ -86,10 +86,10 @@ class BaselineTrainer:
             max_seq_len=self.seq_length
         ).to(device)
         
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), 
+        self.optimizer = torch.optim.AdamW(self.model.parameters(),
                                            lr=config['learning'].get('learning_rate', 0.001),
                                            weight_decay=0.01)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=(device.type == 'cuda'))
+        self.scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
         self.log_interval = config['learning'].get('log_interval', 500)
     
     def train(self, max_steps=5000):
@@ -108,8 +108,8 @@ class BaselineTrainer:
                 y = torch.randint(0, self.vocab_size, (batch_size, self.seq_length), device=device)
             
             self.optimizer.zero_grad()
-            
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+
+            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
                 logits = self.model(x)
                 loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),
@@ -170,7 +170,9 @@ def main():
     with open(config_path) as f:
         config = json.load(f)
     
-    config['learning']['log_interval'] = 5000  # Log every 5000 steps
+    # OPTIMIZATION: Increase batch size for T4 GPU speed
+    config['learning']['batch_size'] = 128  # Larger batches = faster on GPU
+    config['learning']['log_interval'] = 1000  # Log more frequently to see speed
     
     # Run for 1 epoch per dataset
     

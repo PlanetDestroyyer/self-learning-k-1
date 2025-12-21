@@ -81,7 +81,10 @@ def main():
     config['model']['tree_depth'] = 3
     config['model']['branching_factor'] = 3
     config['learning']['top_k'] = 5
-    config['learning']['log_interval'] = 5000  # Log every 5000 steps
+
+    # OPTIMIZATION: Increase batch size for T4 GPU speed
+    config['learning']['batch_size'] = 128  # Larger batches = faster on GPU
+    config['learning']['log_interval'] = 1000  # Log more frequently to see speed
     
     # Run for 1 epoch per dataset (steps = num_train_samples)
     
