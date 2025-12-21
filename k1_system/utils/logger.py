@@ -27,10 +27,14 @@ class TrainingLogger:
         self.metrics_file = self.log_dir / f"metrics_{timestamp}.json"
 
         self.metrics_log = []
+        
+        # OPTIMIZATION: Buffer logs to reduce file I/O
+        self.log_buffer = []
+        self.buffer_size = 100  # Flush every 100 entries
 
     def log(self, message: str, level: str = 'INFO'):
         """
-        Log a message.
+        Log a message (OPTIMIZED with buffering).
 
         Args:
             message: Message to log
@@ -39,12 +43,24 @@ class TrainingLogger:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] [{level}] {message}\n"
 
-        # Write to file
-        with open(self.log_file, 'a') as f:
-            f.write(log_entry)
+        # Add to buffer
+        self.log_buffer.append(log_entry)
+        
+        # Flush if buffer is full
+        if len(self.log_buffer) >= self.buffer_size:
+            self._flush_logs()
 
         # Also print to console
         print(log_entry.strip())
+    
+    def _flush_logs(self):
+        """Flush buffered logs to disk."""
+        if not self.log_buffer:
+            return
+        
+        with open(self.log_file, 'a') as f:
+            f.writelines(self.log_buffer)
+        self.log_buffer = []
 
     def log_metrics(self, iteration: int, metrics: dict):
         """
@@ -92,5 +108,6 @@ class TrainingLogger:
 
     def finalize(self):
         """Finalize logging and save all data."""
+        self._flush_logs()  # Flush any remaining buffered logs
         self._save_metrics()
         self.log("Training completed - logs saved", 'INFO')

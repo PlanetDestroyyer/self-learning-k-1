@@ -130,7 +130,7 @@ class HierarchicalK1Trainer:
         loss_fn = nn.CrossEntropyLoss()
         batch_size = self.config['learning'].get('batch_size', 32)
         start_time = time.time()
-        total_loss = 0.0
+        total_loss = torch.tensor(0.0, device=device)  # Keep on GPU
         
         for step in range(max_steps):
             # Get batch
@@ -164,15 +164,16 @@ class HierarchicalK1Trainer:
                 for idx in path_indices:
                     self._model_unwrapped.all_nodes[idx].last_updated_step = step
 
-            # Accumulate loss
+            # Accumulate loss (on GPU - no sync!)
             total_loss += loss.detach()
             
-            # Logging (simplified for GPU-accelerated path)
-            if step % self.log_interval == 0:
-                loss_val = loss.item()
+            # Logging (OPTIMIZED: single .item() call per interval)
+            if step % self.log_interval == 0 and step > 0:
+                # Single CPU-GPU sync point for logging
+                avg_loss = (total_loss / step).item()
                 elapsed = time.time() - start_time
-                speed = (step + 1) / elapsed if elapsed > 0 else 0
-                print(f"\\n[{step:6d}] Loss: {loss_val:.4f} | Speed: {speed:.1f} step/s")
+                speed = step / elapsed if elapsed > 0 else 0
+                print(f"\n[{step:6d}] Loss: {avg_loss:.4f} | Speed: {speed:.1f} step/s")
         
         elapsed = time.time() - start_time
         print(f"\nTraining complete: {max_steps} steps in {elapsed:.1f}s")

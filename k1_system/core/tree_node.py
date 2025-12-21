@@ -116,14 +116,22 @@ class TreeNode(nn.Module):
         """
         Compute gradient norm for this node's parameters.
         
+        OPTIMIZED: Keeps computation on GPU, returns as Python float
+        but computation happens in single batched operation.
+        
         Returns:
             L2 norm of all gradients in this node
         """
-        total_norm = 0.0
-        for p in self.parameters():
-            if p.grad is not None:
-                total_norm += p.grad.pow(2).sum().item()
-        self.gradient_norm = math.sqrt(total_norm)
+        # Gather all gradients that exist
+        grads = [p.grad for p in self.parameters() if p.grad is not None]
+        
+        if not grads:
+            self.gradient_norm = 0.0
+            return 0.0
+        
+        # Efficient: stack and compute single norm (stays on GPU longer)
+        norm_tensor = torch.stack([g.norm() for g in grads]).norm()
+        self.gradient_norm = norm_tensor.item()  # Single sync point
         return self.gradient_norm
     
     def __repr__(self) -> str:
