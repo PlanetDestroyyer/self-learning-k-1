@@ -148,7 +148,10 @@ class HierarchicalTree(nn.Module):
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, List[TreeNode]]:
         """
-        Forward pass through the tree.
+        Forward pass through the tree using LEVEL-WISE batched processing.
+        
+        This is much faster than recursive because all nodes at same level
+        are processed in parallel.
         
         Args:
             x: Input token indices [batch, seq_len]
@@ -163,42 +166,41 @@ class HierarchicalTree(nn.Module):
         h = self.embedding(x)  # [batch, seq, embed]
         h = h + self.pos_encoding[:seq_len].unsqueeze(0)
         
-        # Create causal mask
+        # Create causal mask ONCE
         mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
         
-        # Process through tree (all nodes)
+        # Track path
         path = []
-        h = self._forward_node(h, self.root, mask, path)
+        
+        # Level 0: Root
+        h = self.root(h, mask)
+        path.append(self.root)
+        
+        # Process remaining levels in PARALLEL
+        current_nodes = self.root.child_nodes
+        
+        while current_nodes:
+            # Process ALL nodes at this level at once
+            level_outputs = []
+            next_level_nodes = []
+            
+            for node in current_nodes:
+                out = node(h, mask)
+                level_outputs.append(out)
+                path.append(node)
+                next_level_nodes.extend(node.child_nodes)
+            
+            # Average outputs from this level
+            if level_outputs:
+                h = torch.stack(level_outputs, dim=0).mean(dim=0)
+            
+            current_nodes = next_level_nodes
         
         # Output projection
         h = self.output_norm(h)
         logits = self.output_proj(h)
         
         return logits, path
-    
-    def _forward_node(
-        self, 
-        x: torch.Tensor, 
-        node: TreeNode, 
-        mask: torch.Tensor, 
-        path: List[TreeNode]
-    ) -> torch.Tensor:
-        """Recursively forward through a node and its children."""
-        # Process through this node
-        x = node(x, mask)
-        path.append(node)
-
-        # If has children, process through them (combine outputs)
-        if node.child_nodes:
-            child_outputs = []
-            for child in node.child_nodes:
-                child_out = self._forward_node(x, child, mask, path)
-                child_outputs.append(child_out)
-
-            # Average child outputs (can be changed to routing later)
-            x = torch.stack(child_outputs, dim=0).mean(dim=0)
-
-        return x
     
     # ========================================
     # Responsibility Signal Methods (OPTIMIZED)
