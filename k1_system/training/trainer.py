@@ -140,7 +140,7 @@ class HierarchicalK1Trainer:
             self.optimizer.zero_grad()
 
             with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
-                logits, path = self.model(x)
+                logits = self.model(x)  # Only logits returned (DataParallel compatible)
                 loss = loss_fn(
                     logits[:, :-1].reshape(-1, self.vocab_size),
                     y[:, 1:].reshape(-1)

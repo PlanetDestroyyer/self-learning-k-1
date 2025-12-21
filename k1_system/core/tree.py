@@ -146,19 +146,21 @@ class HierarchicalTree(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, List[TreeNode]]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through the tree using LEVEL-WISE batched processing.
         
         This is much faster than recursive because all nodes at same level
         are processed in parallel.
         
+        NOTE: Only returns logits (tensor) for DataParallel compatibility.
+        Use get_last_path() to access the path after forward.
+        
         Args:
             x: Input token indices [batch, seq_len]
         
         Returns:
             logits: Output logits [batch, seq_len, vocab_size]
-            path: List of nodes that processed the input
         """
         batch_size, seq_len = x.shape
         
@@ -169,15 +171,15 @@ class HierarchicalTree(nn.Module):
         # Create causal mask ONCE
         mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
         
-        # Track path
-        path = []
+        # Track path (stored internally for DataParallel compatibility)
+        self._last_path = []
         
         # Level 0: Root
         h = self.root(h, mask)
-        path.append(self.root)
+        self._last_path.append(self.root)
         
         # Process remaining levels in PARALLEL
-        current_nodes = self.root.child_nodes
+        current_nodes = list(self.root.child_nodes)
         
         while current_nodes:
             # Process ALL nodes at this level at once
@@ -187,7 +189,7 @@ class HierarchicalTree(nn.Module):
             for node in current_nodes:
                 out = node(h, mask)
                 level_outputs.append(out)
-                path.append(node)
+                self._last_path.append(node)
                 next_level_nodes.extend(node.child_nodes)
             
             # Average outputs from this level
@@ -200,7 +202,11 @@ class HierarchicalTree(nn.Module):
         h = self.output_norm(h)
         logits = self.output_proj(h)
         
-        return logits, path
+        return logits
+    
+    def get_last_path(self) -> List[TreeNode]:
+        """Get the path from the last forward pass."""
+        return getattr(self, '_last_path', self.all_nodes)
     
     # ========================================
     # Responsibility Signal Methods (OPTIMIZED)
