@@ -98,7 +98,7 @@ class TreeNode(nn.Module):
         ff_out = self.ff(x)
         x = self.ff_norm(x + ff_out)
         
-        self.activation_count += 1
+        # NOTE: activation_count removed to prevent torch.compile recompilation
         return x
     
     def add_child(self, child: 'TreeNode'):
