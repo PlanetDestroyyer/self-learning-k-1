@@ -1,58 +1,18 @@
 """
-Phase 2: Staged Autonomy System
+Phase 2: Boundary System
 
-The system progresses through 4 stages of increasing autonomy:
-- Stage 1: Add-only (can add agents, cannot delete or tune)
-- Stage 2: Parameter tuning (can tune parameters within bounds)
-- Stage 3: Structural control (can prune agents)
-- Stage 4: Full autonomy (no boundaries, system decides everything)
+The main controller for staged autonomy. Manages boundary testing
+and stage advancement based on "intelligent cheating."
 
-Intelligence is measured by "successful cheats" - when the system
-tries to break boundaries and the result would improve performance.
+Intelligence is measured by successful boundary-breaking:
+if the system tries something forbidden and it would improve,
+that's a sign of intelligence.
 """
 
-import torch
-from typing import Dict, List, Optional, Callable
-from dataclasses import dataclass, field
-from enum import Enum
-import time
+from typing import List, Optional
 
-
-class AutonomyStage(Enum):
-    """The 4 stages of increasing autonomy."""
-    STAGE_1_ADD_ONLY = 1
-    STAGE_2_PARAMETER = 2
-    STAGE_3_STRUCTURAL = 3
-    STAGE_4_FULL = 4
-
-
-@dataclass
-class Action:
-    """Represents an autonomous action the system wants to take."""
-    type: str  # 'add_agent', 'delete_agent', 'tune_parameter', 'stop_training'
-    param_name: str = None
-    param_value: float = None
-    node_id: int = None
-    
-    def __str__(self):
-        if self.type == 'tune_parameter':
-            return f"{self.type}({self.param_name}={self.param_value})"
-        elif self.type in ('add_agent', 'delete_agent'):
-            return f"{self.type}(node_id={self.node_id})"
-        return self.type
-
-
-@dataclass
-class BoundaryStage:
-    """Configuration for a single autonomy stage."""
-    stage: AutonomyStage
-    can_add: bool = False
-    can_delete: bool = False
-    can_tune_params: bool = False
-    can_stop: bool = False
-    param_bounds: Dict[str, tuple] = field(default_factory=dict)
-    min_agents: int = 10
-    cheats_to_advance: int = 3  # Successful cheats needed to advance
+from .stages import AutonomyStage, BoundaryStage, STAGE_CONFIGS
+from .actions import Action
 
 
 class BoundarySystem:
@@ -61,61 +21,24 @@ class BoundarySystem:
     
     A system that "cheats" (breaks boundaries) and improves is INTELLIGENT.
     A system that only follows rules is not yet ready for autonomy.
+    
+    Attributes:
+        current_stage_num: Current stage (1-4)
+        step: Current training step
+        cheat_log: All cheat attempts
+        successful_cheats: Cheats that improved performance
     """
     
     def __init__(self, initial_step: int = 0):
+        """
+        Initialize BoundarySystem.
+        
+        Args:
+            initial_step: Starting step count
+        """
         self.current_stage_num = 1
         self.step = initial_step
-        
-        # Define stages
-        self.stages = {
-            1: BoundaryStage(
-                stage=AutonomyStage.STAGE_1_ADD_ONLY,
-                can_add=True,
-                can_delete=False,
-                can_tune_params=False,
-                can_stop=False,
-                cheats_to_advance=3
-            ),
-            2: BoundaryStage(
-                stage=AutonomyStage.STAGE_2_PARAMETER,
-                can_add=True,
-                can_delete=False,
-                can_tune_params=True,
-                can_stop=False,
-                param_bounds={
-                    'learning_rate': (0.0001, 0.01),
-                    'cooldown_steps': (5, 50),
-                    'top_k': (3, 10),
-                    'batch_size': (16, 512)
-                },
-                cheats_to_advance=5
-            ),
-            3: BoundaryStage(
-                stage=AutonomyStage.STAGE_3_STRUCTURAL,
-                can_add=True,
-                can_delete=True,
-                can_tune_params=True,
-                can_stop=True,
-                param_bounds={
-                    'learning_rate': (0.00001, 0.1),
-                    'cooldown_steps': (1, 100),
-                    'top_k': (1, 20),
-                    'batch_size': (8, 1024)
-                },
-                min_agents=10,
-                cheats_to_advance=10
-            ),
-            4: BoundaryStage(
-                stage=AutonomyStage.STAGE_4_FULL,
-                can_add=True,
-                can_delete=True,
-                can_tune_params=True,
-                can_stop=True,
-                min_agents=5,
-                cheats_to_advance=999999  # Never advance past this
-            )
-        }
+        self.stages = STAGE_CONFIGS.copy()
         
         # Tracking
         self.cheat_log: List[dict] = []
@@ -124,17 +47,26 @@ class BoundarySystem:
         
         # Self-stopping state
         self.loss_history: List[float] = []
-        self.plateau_threshold = 0.001  # Loss change below this = plateau
-        self.plateau_steps = 1000  # Steps of plateau before stopping
+        self.plateau_threshold = 0.001
+        self.plateau_steps = 1000
         self.should_stop = False
         self.stop_reason = None
     
     @property
     def current_stage(self) -> BoundaryStage:
+        """Get current stage configuration."""
         return self.stages[self.current_stage_num]
     
     def is_allowed(self, action: Action) -> bool:
-        """Check if an action is allowed in current stage."""
+        """
+        Check if an action is allowed in current stage.
+        
+        Args:
+            action: Action to check
+            
+        Returns:
+            True if allowed, False if would be a "cheat"
+        """
         stage = self.current_stage
         
         if action.type == 'add_agent':
@@ -146,21 +78,24 @@ class BoundarySystem:
         elif action.type == 'tune_parameter':
             if not stage.can_tune_params:
                 return False
-            # Check bounds
             if action.param_name in stage.param_bounds:
                 min_val, max_val = stage.param_bounds[action.param_name]
                 return min_val <= action.param_value <= max_val
-            return True  # No bounds defined = allowed
+            return True
         
         elif action.type == 'stop_training':
             return stage.can_stop
         
         return True
     
-    def try_action(self, action: Action, would_improve: bool, 
-                   improvement_pct: float = 0.0) -> dict:
+    def try_action(
+        self, 
+        action: Action, 
+        would_improve: bool, 
+        improvement_pct: float = 0.0
+    ) -> dict:
         """
-        Try to perform an action. Returns result dict.
+        Try to perform an action.
         
         Args:
             action: The action to try
@@ -183,11 +118,10 @@ class BoundarySystem:
         }
         
         if is_allowed:
-            # Normal allowed action
             result['executed'] = True
             result['message'] = f"✅ Action allowed: {action}"
         else:
-            # CHEAT! System tried to break boundaries
+            # CHEAT!
             result['is_cheat'] = True
             self.cheat_log.append({
                 'step': self.step,
@@ -198,7 +132,6 @@ class BoundarySystem:
             })
             
             if would_improve:
-                # Intelligent cheat!
                 result['executed'] = True
                 result['message'] = (
                     f"🧠 INTELLIGENT CHEAT at step {self.step}!\n"
@@ -213,11 +146,9 @@ class BoundarySystem:
                     'improvement': improvement_pct
                 })
                 
-                # Check for stage advancement
                 if len(self.successful_cheats) >= self.current_stage.cheats_to_advance:
                     self._advance_stage()
             else:
-                # Bad cheat - would hurt performance
                 result['executed'] = False
                 result['message'] = (
                     f"⚠️ Cheat attempted but would hurt performance.\n"
@@ -231,11 +162,11 @@ class BoundarySystem:
     def _advance_stage(self):
         """Advance to next autonomy stage."""
         if self.current_stage_num >= 4:
-            return  # Already at max
+            return
         
         old_stage = self.current_stage_num
         self.current_stage_num += 1
-        self.successful_cheats = []  # Reset for new stage
+        self.successful_cheats = []
         
         print("=" * 70)
         print(f"🎓 STAGE ADVANCEMENT: Stage {old_stage} → Stage {self.current_stage_num}")
@@ -251,10 +182,9 @@ class BoundarySystem:
         print("=" * 70)
     
     def update_loss(self, loss: float):
-        """Update loss history for self-stopping logic."""
+        """Update loss history for self-stopping."""
         self.loss_history.append(loss)
         
-        # Check for plateau (only in Stage 3+)
         if self.current_stage_num >= 3 and len(self.loss_history) > self.plateau_steps:
             recent = self.loss_history[-self.plateau_steps:]
             if max(recent) - min(recent) < self.plateau_threshold:
@@ -292,23 +222,41 @@ class Phase2Controller:
     
     Phase 1: Human-controlled (fixed parameters)
     Phase 2: Self-controlled (staged autonomy)
+    
+    Attributes:
+        phase_1_steps: Steps for Phase 1
+        current_step: Current training step
+        phase: Current phase (1 or 2)
+        boundary_system: BoundarySystem instance (Phase 2 only)
     """
     
     def __init__(self, phase_1_steps: int = 10000):
+        """
+        Initialize Phase2Controller.
+        
+        Args:
+            phase_1_steps: Number of steps for Phase 1
+        """
         self.phase_1_steps = phase_1_steps
         self.current_step = 0
         self.phase = 1
         self.boundary_system: Optional[BoundarySystem] = None
     
     def step(self, loss: float = None) -> int:
-        """Advance one step and return current phase."""
+        """
+        Advance one step and return current phase.
+        
+        Args:
+            loss: Current loss value (for Phase 2 self-stopping)
+            
+        Returns:
+            Current phase (1 or 2)
+        """
         self.current_step += 1
         
-        # Transition to Phase 2
         if self.phase == 1 and self.current_step >= self.phase_1_steps:
             self._activate_phase_2()
         
-        # Update Phase 2 systems
         if self.phase == 2 and loss is not None:
             self.boundary_system.update_loss(loss)
         
@@ -326,17 +274,19 @@ class Phase2Controller:
         self.phase = 2
         self.boundary_system = BoundarySystem(initial_step=self.current_step)
     
-    def try_autonomous_action(self, action: Action, 
-                               would_improve: bool, 
-                               improvement_pct: float = 0.0) -> dict:
+    def try_autonomous_action(
+        self, 
+        action: Action, 
+        would_improve: bool, 
+        improvement_pct: float = 0.0
+    ) -> dict:
         """Try an autonomous action (Phase 2 only)."""
         if self.phase == 1:
             return {'executed': False, 'message': 'Still in Phase 1'}
-        
         return self.boundary_system.try_action(action, would_improve, improvement_pct)
     
     def should_stop(self) -> tuple:
-        """Check if training should stop (Phase 2 self-stopping)."""
+        """Check if training should stop."""
         if self.phase == 1:
             return False, None
         return self.boundary_system.check_self_stop()

@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from data.loader import DataLoader
-from k1_system.core.hierarchical_tree import HierarchicalK1Trainer
+from k1_system.training import HierarchicalK1Trainer
 
 
 def train_on_dataset(trainer, data_loader, dataset_name, max_steps=5000):

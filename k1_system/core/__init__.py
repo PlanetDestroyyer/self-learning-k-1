@@ -1,9 +1,8 @@
 """
-Core components for the Self-Learning K-1 System.
+Core module for K-1 hierarchical tree system.
 """
 
-from .transformer_agent import TransformerEncoder
+from .tree_node import TreeNode
+from .tree import HierarchicalTree
 
-__all__ = [
-    'TransformerEncoder'
-]
+__all__ = ['TreeNode', 'HierarchicalTree']

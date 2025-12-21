@@ -26,8 +26,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from data.loader import DataLoader
-from k1_system.core.hierarchical_tree import HierarchicalTree, HierarchicalK1Trainer
-from k1_system.autonomy.boundary_system import Phase2Controller, Action, BoundarySystem
+from k1_system.core import HierarchicalTree
+from k1_system.training import HierarchicalK1Trainer
+from k1_system.autonomy import Phase2Controller, Action, BoundarySystem
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

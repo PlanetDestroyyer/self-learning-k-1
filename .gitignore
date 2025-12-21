@@ -49,3 +49,6 @@ training_comparison.png
 .vscode/
 *.swp
 .DS_Store
+
+
+.claude
