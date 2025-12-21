@@ -74,6 +74,7 @@ class TreeNode(nn.Module):
         self.activation_count: int = 0
         self.gradient_norm: float = 0.0
         self.last_updated_step: int = -1000  # For trust cooldown
+        self.update_count: int = 0  # Track total updates for analysis
     
     def forward(
         self, 

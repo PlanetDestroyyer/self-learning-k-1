@@ -163,11 +163,14 @@ class HierarchicalK1Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            # Mark updated nodes for cooldown
+            # Mark updated nodes for cooldown and tracking
             if hasattr(self._model_unwrapped, '_last_scales_indices'):
                 path_indices = self._model_unwrapped._last_scales_indices
                 for idx in path_indices:
-                    self._model_unwrapped.all_nodes[idx].last_updated_step = step
+                    node = self._model_unwrapped.all_nodes[idx]
+                    node.last_updated_step = step
+                    if hasattr(node, 'update_count'):
+                        node.update_count += 1  # Increment counter
 
             # Accumulate loss (on GPU - no sync!)
             total_loss += loss.detach()

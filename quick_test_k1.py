@@ -101,12 +101,12 @@ def main():
     print("\n📊 Node Update Distribution (WikiText):")
     print("-" * 50)
     node_counts = {}
-    for node in trainer._model_unwrapped.all_nodes:
-        if hasattr(node, 'last_updated_step') and node.last_updated_step >= 0:
-            node_id = f"Node_{node.node_id}" if hasattr(node, 'node_id') else f"Node_{id(node)}"
-            node_counts[node_id] = node_counts.get(node_id, 0) + 1
+    for idx, node in enumerate(trainer._model_unwrapped.all_nodes):
+        if hasattr(node, 'update_count'):
+            node_id = f"Node_{idx}"
+            node_counts[node_id] = node.update_count
     
-    if node_counts:
+    if node_counts and sum(node_counts.values()) > 0:
         sorted_nodes = sorted(node_counts.items(), key=lambda x: x[1], reverse=True)
         print(f"{'Node':<20} {'Update Count':<15} {'% of total':<15}")
         print("-" * 50)
@@ -117,10 +117,13 @@ def main():
         
         # Check for concentration
         top_3_pct = sum(c for _, c in sorted_nodes[:3]) / total_updates * 100 if total_updates > 0 else 0
+        print(f"\nTotal updates: {total_updates} over {STEPS_PER_DATASET} steps")
         if top_3_pct > 60:
-            print(f"\n⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
+            print(f"⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
         else:
-            print(f"\n✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+            print(f"✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+    else:
+        print("⚠️  No node updates tracked!")
     
     print("\n--- Evaluation after WikiText ---")
     results['after_wiki'] = {}
@@ -134,7 +137,8 @@ def main():
     
     # Reset node counters to track Code updates separately
     for node in trainer._model_unwrapped.all_nodes:
-        node.last_updated_step = -1
+        if hasattr(node, 'update_count'):
+            node.update_count = 0
     
     trainer.train(max_steps=STEPS_PER_DATASET)
     
@@ -142,12 +146,12 @@ def main():
     print("\n📊 Node Update Distribution (Code):")
     print("-" * 50)
     node_counts_code = {}
-    for node in trainer._model_unwrapped.all_nodes:
-        if hasattr(node, 'last_updated_step') and node.last_updated_step >= 0:
-            node_id = f"Node_{node.node_id}" if hasattr(node, 'node_id') else f"Node_{id(node)}"
-            node_counts_code[node_id] = node_counts_code.get(node_id, 0) + 1
+    for idx, node in enumerate(trainer._model_unwrapped.all_nodes):
+        if hasattr(node, 'update_count'):
+            node_id = f"Node_{idx}"
+            node_counts_code[node_id] = node.update_count
     
-    if node_counts_code:
+    if node_counts_code and sum(node_counts_code.values()) > 0:
         sorted_nodes = sorted(node_counts_code.items(), key=lambda x: x[1], reverse=True)
         print(f"{'Node':<20} {'Update Count':<15} {'% of total':<15}")
         print("-" * 50)
@@ -157,10 +161,13 @@ def main():
             print(f"{node_id:<20} {count:<15} {pct:>6.1f}%")
         
         top_3_pct = sum(c for _, c in sorted_nodes[:3]) / total_updates * 100 if total_updates > 0 else 0
+        print(f"\nTotal updates: {total_updates} over {STEPS_PER_DATASET} steps")
         if top_3_pct > 60:
-            print(f"\n⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
+            print(f"⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
         else:
-            print(f"\n✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+            print(f"✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+    else:
+        print("⚠️  No node updates tracked!")
     
     print("\n--- Evaluation after Code ---")
     results['after_code'] = {}
@@ -175,7 +182,8 @@ def main():
     
     # Reset for Scientific
     for node in trainer._model_unwrapped.all_nodes:
-        node.last_updated_step = -1
+        if hasattr(node, 'update_count'):
+            node.update_count = 0
     
     trainer.train(max_steps=STEPS_PER_DATASET)
     
@@ -183,12 +191,12 @@ def main():
     print("\n📊 Node Update Distribution (Scientific):")
     print("-" * 50)
     node_counts_sci = {}
-    for node in trainer._model_unwrapped.all_nodes:
-        if hasattr(node, 'last_updated_step') and node.last_updated_step >= 0:
-            node_id = f"Node_{node.node_id}" if hasattr(node, 'node_id') else f"Node_{id(node)}"
-            node_counts_sci[node_id] = node_counts_sci.get(node_id, 0) + 1
+    for idx, node in enumerate(trainer._model_unwrapped.all_nodes):
+        if hasattr(node, 'update_count'):
+            node_id = f"Node_{idx}"
+            node_counts_sci[node_id] = node.update_count
     
-    if node_counts_sci:
+    if node_counts_sci and sum(node_counts_sci.values()) > 0:
         sorted_nodes = sorted(node_counts_sci.items(), key=lambda x: x[1], reverse=True)
         print(f"{'Node':<20} {'Update Count':<15} {'% of total':<15}")
         print("-" * 50)
@@ -198,10 +206,13 @@ def main():
             print(f"{node_id:<20} {count:<15} {pct:>6.1f}%")
         
         top_3_pct = sum(c for _, c in sorted_nodes[:3]) / total_updates * 100 if total_updates > 0 else 0
+        print(f"\nTotal updates: {total_updates} over {STEPS_PER_DATASET} steps")
         if top_3_pct > 60:
-            print(f"\n⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
+            print(f"⚠️  Top 3 nodes handle {top_3_pct:.1f}% of updates (rich-get-richer!)")
         else:
-            print(f"\n✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+            print(f"✅  Balanced: Top 3 nodes handle {top_3_pct:.1f}% of updates")
+    else:
+        print("⚠️  No node updates tracked!")
     
     print("\n--- Evaluation after Scientific ---")
     results['after_sci'] = {}
