@@ -58,6 +58,7 @@ class TreeNode(nn.Module):
         self.level = 0
         self.activation_count = 0
         self.gradient_norm = 0.0
+        self.last_updated_step = -1000  # For trust cooldown
     
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Process input through this node."""
@@ -262,32 +263,82 @@ class HierarchicalTree(nn.Module):
                 total += p.grad.norm().item()
         return total
 
-    def find_responsible_path(self) -> List[Tuple[TreeNode, float]]:
+    def compute_responsibility(self, node: TreeNode, loss: float, current_step: int,
+                               cooldown_steps: int = 50, penalty: float = 0.1) -> float:
+        """
+        Compute responsibility score for a node.
+        
+        responsibility = gradient × loss × cooldown_penalty
+        
+        Args:
+            node: The node to compute responsibility for
+            loss: Current batch loss value
+            current_step: Current training step
+            cooldown_steps: Steps before cooldown expires
+            penalty: Minimum multiplier for recently-updated nodes
+        
+        Returns:
+            Responsibility score (higher = more responsible for error)
+        """
+        grad = self._get_node_gradient_norm(node)
+        
+        # Cooldown penalty: recently updated nodes get lower responsibility
+        steps_since_update = current_step - node.last_updated_step
+        if steps_since_update < cooldown_steps:
+            # Linear ramp from penalty to 1.0 over cooldown period
+            cooldown_factor = penalty + (1 - penalty) * (steps_since_update / cooldown_steps)
+        else:
+            cooldown_factor = 1.0
+        
+        return grad * loss * cooldown_factor
+
+    def find_responsible_path(self, loss: float = 1.0, current_step: int = 0) -> List[Tuple[TreeNode, float]]:
         """
         Hierarchically drill down from Manager to find responsible agent path.
+        
+        Uses improved responsibility signal: gradient × loss × cooldown_penalty
+
+        Args:
+            loss: Current batch loss value (higher = weight responsibility more)
+            current_step: Current training step (for cooldown calculation)
 
         Returns:
-            List of (node, gradient_norm) from Manager → Agent → Sub-Agent
+            List of (node, responsibility_score) from Manager → Agent → Sub-Agent
         """
         path = []
         current = self.root
 
         while not current.is_leaf:
-            grad = self._get_node_gradient_norm(current)
-            path.append((current, grad))
+            resp = self.compute_responsibility(current, loss, current_step)
+            path.append((current, resp))
 
-            # Find child with highest gradient (responsible child)
+            # Find child with highest responsibility (most responsible child)
             if current.child_nodes:
-                child_grads = [
-                    (child, self._get_node_gradient_norm(child))
+                child_resps = [
+                    (child, self.compute_responsibility(child, loss, current_step))
                     for child in current.child_nodes
                 ]
-                culprit_child, _ = max(child_grads, key=lambda x: x[1])
+                culprit_child, _ = max(child_resps, key=lambda x: x[1])
                 current = culprit_child
 
         # Add leaf (sub-agent culprit)
-        path.append((current, self._get_node_gradient_norm(current)))
+        path.append((current, self.compute_responsibility(current, loss, current_step)))
         return path
+
+    def mark_nodes_updated(self, scales: dict, current_step: int):
+        """
+        Mark nodes that received updates with current step.
+        
+        This enables the trust cooldown mechanism - recently updated nodes
+        will have reduced responsibility scores.
+        
+        Args:
+            scales: Dict of node_id -> update_scale from get_proportional_scales()
+            current_step: Current training step
+        """
+        for node in self.all_nodes:
+            if scales.get(node.node_id, 0.0) > 0:
+                node.last_updated_step = current_step
 
     def get_proportional_scales(self, responsible_path: List[Tuple[TreeNode, float]]) -> dict:
         """
@@ -482,7 +533,11 @@ class HierarchicalK1Trainer:
             with torch.no_grad():
                 # Step 1: Hierarchically drill down to find responsible path
                 #         Manager → Agent X → Sub-Agent Y
-                responsible_path = self.model.find_responsible_path()
+                #         Uses: gradient × loss × cooldown_penalty
+                responsible_path = self.model.find_responsible_path(
+                    loss=loss.item(),
+                    current_step=step
+                )
 
                 # Step 2: Compute proportional update scales
                 #         Sub-Agent: 100%, Agent: 15%, Manager: 5%, Others: 0%
@@ -503,6 +558,9 @@ class HierarchicalK1Trainer:
             # Optimizer step
             self.scaler.step(self.optimizer)
             self.scaler.update()
+
+            # Step 4: Mark updated nodes for trust cooldown
+            self.model.mark_nodes_updated(scales, step)
 
             # Accumulate loss WITHOUT sync (CRITICAL!)
             total_loss += loss.detach()

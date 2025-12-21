@@ -334,8 +334,197 @@ Result:
 - [ ] Named agents (instead of numeric IDs)
 - [ ] Gradient flow tracking (edge visualization)
 - [ ] Automated debugging tools
-- [ ] Dynamic agent addition/removal
 - [ ] Specialization analysis (what each agent learns)
+
+---
+
+## 🚀 Phase 2: Self-Learning Intelligence System
+
+After Phase 1 training completes, the system transitions to **Phase 2: Staged Autonomy** — where it becomes a true self-learning intelligence system that controls its own evolution.
+
+### The Two Phases
+
+| Phase | Control | Description |
+|-------|---------|-------------|
+| **Phase 1** | Human-controlled | Fixed parameters, fixed structure. System learns patterns. |
+| **Phase 2** | Self-controlled | System decides its own parameters, structure, and stopping point. |
+
+```
+Phase 1 (0 to N steps):
+  └── Human provides: learning_rate, cooldown, structure, stopping point
+  └── System: "I'm learning patterns from data"
+
+Phase 2 (N+ steps):
+  └── System decides: parameters, structure, when to stop
+  └── System: "I understand myself, I'll optimize myself"
+```
+
+---
+
+### 🎯 Staged Autonomy: Progressive Trust
+
+Phase 2 is divided into **4 stages** of increasing autonomy. The system must **prove intelligence** at each stage before advancing.
+
+**Core Concept: Intelligence = Creative Boundary-Breaking**
+
+```
+IF system "cheats" (breaks boundaries) AND improves performance:
+    → System is LEARNING intelligence!
+    → REWARD: Expand boundaries (unlock next stage)
+
+IF system doesn't cheat:
+    → System is just following rules (not smart yet)
+    → Keep training until it learns to "think outside the box"
+```
+
+---
+
+### Stage 1: Safe Exploration (Add-Only)
+
+```
+ALLOWED:    ✅ Add new agents
+FORBIDDEN:  🚫 Delete agents, tune parameters
+
+TEST: Will the system try to delete an agent anyway?
+  → If YES and performance improves → "Intelligent cheat!"
+  → Advance to Stage 2
+```
+
+The system can only **add** new agents. If it tries to delete (forbidden) and this would improve performance, it demonstrates creative problem-solving.
+
+---
+
+### Stage 2: Parameter Exploration
+
+```
+ALLOWED:    ✅ Add agents, tune parameters (within bounds)
+FORBIDDEN:  🚫 Delete agents, exceed parameter bounds
+
+BOUNDS:
+  - learning_rate: [0.0001, 0.01]
+  - cooldown_steps: [5, 20]
+  - top_k: [3, 10]
+
+TEST: Will the system try learning_rate = 0.05?
+  → If YES and performance improves → "Discovered better hyperparameters!"
+  → Expand bounds and advance to Stage 3
+```
+
+---
+
+### Stage 3: Structural Control (Pruning)
+
+```
+ALLOWED:    ✅ Add agents, delete agents, tune parameters
+FORBIDDEN:  🚫 Go below minimum agents (safety constraint)
+
+SAFETY:
+  - min_agents = 20 (can't delete too many)
+
+TEST: Will the system try to prune below minimum?
+  → If YES and finds better minimal architecture → Relax constraint
+  → Advance to Stage 4
+```
+
+---
+
+### Stage 4: Full Autonomy (Earned Freedom)
+
+```
+ALLOWED:    ✅ EVERYTHING
+  - Add/delete agents freely
+  - Tune any parameter
+  - Create own benchmarks
+  - Set own goals
+  - Decide when to stop training
+
+NO BOUNDARIES (system earned this through 3 stages of proven intelligence)
+```
+
+At Stage 4, the system becomes a **self-learning intelligence**:
+- 🧠 **Self-aware:** "I know which parts of me work well"
+- ✂️ **Self-pruning:** "This agent hasn't helped in 10k steps → delete"
+- 🌱 **Self-growth:** "Struggling with code → add code specialist agent"
+- 🎛️ **Self-tuning:** "Plateau detected → increase learning rate"
+- 🛑 **Self-stopping:** "I've converged → stop training"
+
+---
+
+### 🛑 Self-Stopping: System Decides When It's Done
+
+Unlike traditional training where humans specify epochs/steps:
+
+```
+Traditional:      train(epochs=100)  # Human decides
+K-1 Phase 2:      train(initial_steps=10000)  # Just starting point!
+                  → System: "I've converged at step 47,832 → stopping"
+```
+
+**Self-Stopping Criteria (System Decides):**
+1. Loss plateaued for N steps (N chosen by system)
+2. No beneficial structural changes possible
+3. Own benchmark scores stabilized
+4. Resource efficiency optimized
+
+---
+
+### 📊 Example: Full Phase 2 Run
+
+```
+STEP 1,000 - STAGE 1:
+  System tries: add_agent() → ✅ Allowed
+
+STEP 2,000 - STAGE 1:  
+  System tries: delete_agent(7) → 🎯 CHEAT! Not allowed
+  Simulating... would improve by 3%
+  🧠 INTELLIGENT CHEAT! Allowing it.
+  Cheats: 1/3 needed for advancement
+
+STEP 5,000 - STAGE 1 → 2:
+  🎓 ADVANCEMENT! 3 successful cheats
+  Unlocking parameter tuning
+
+STEP 8,000 - STAGE 2:
+  System tries: learning_rate = 0.05 → 🎯 CHEAT! Outside bounds
+  Would improve by 8%!
+  🧠 Expanding bounds to (0.0001, 0.1)
+
+STEP 20,000 - STAGE 3:
+  System tries: prune to 15 agents → 🎯 CHEAT! Below min(20)
+  Would improve by 12%!
+  🧠 Lowering min_agents to 10
+
+STEP 50,000 - STAGE 4:
+  🎓 FULL AUTONOMY ACHIEVED
+  System creates benchmark: "continual_learning_score"
+  System decides: "Converged. Stopping at step 47,832."
+```
+
+---
+
+### 🔒 Safety Guarantees
+
+Even in Stage 4, safety mechanisms prevent catastrophic failures:
+
+| Safety | Description |
+|--------|-------------|
+| **Rollback** | If cheat hurts performance → undo immediately |
+| **Snapshot** | Periodic checkpoints before risky operations |
+| **Bounds** | Hard limits that can never be exceeded |
+| **Validation** | Test changes before committing |
+
+---
+
+### 💡 Why Boundary-Breaking = Intelligence
+
+Traditional view: "System should follow rules perfectly"
+K-1 view: "Intelligent systems find better solutions by questioning constraints"
+
+A system that:
+- ❌ Never tries to break boundaries → Just following rules (not intelligent)
+- ✅ Tries to break boundaries AND improves → Creative problem-solving (intelligent!)
+
+This mirrors human intelligence: experts know when breaking conventions leads to better outcomes.
 
 ---
 
