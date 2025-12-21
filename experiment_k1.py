@@ -86,7 +86,7 @@ def main():
     # 512 was too large (3.7 step/s), 64 was fast (26 step/s)
     # 128 provides good balance between speed and throughput
     config['learning']['batch_size'] = 64
-    config['learning']['log_interval'] =1000
+    config['learning']['log_interval'] =500
 
     # Enable PyTorch optimizations
     torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU
