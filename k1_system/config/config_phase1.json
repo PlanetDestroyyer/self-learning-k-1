@@ -12,8 +12,8 @@
     "embed_dim": 128,
     "max_seq_len": 64,
     "num_heads": 4,
-    "tree_depth": 3,
-    "branching_factor": 3
+    "tree_depth": 4,
+    "branching_factor": [4, 3, 2]
   },
   "hierarchy": {
     "num_domains": 5,

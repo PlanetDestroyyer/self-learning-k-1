@@ -106,16 +106,23 @@ class HierarchicalTree(nn.Module):
         embed_dim: int = 128,
         ff_dim: int = 256,
         num_heads: int = 4,
-        tree_depth: int = 3,          # Root + 2 levels
-        branching_factor: int = 3,    # 3 children per node
+        tree_depth: int = 4,          # Root + Nodes + Agents + Sub-Agents
+        branching_factor = None,      # [4, 3, 2] or single int
         max_seq_len: int = 64,
         dropout: float = 0.1
     ):
         super().__init__()
-        
+
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.tree_depth = tree_depth
+
+        # Support variable branching: [4 nodes, 3 agents, 2 sub-agents]
+        if branching_factor is None:
+            branching_factor = [4, 3, 2]  # Default: 4 Nodes, 3 Agents, 2 Sub-Agents
+        elif isinstance(branching_factor, int):
+            branching_factor = [branching_factor] * (tree_depth - 1)
+
         self.branching_factor = branching_factor
         
         # Shared embedding
@@ -144,17 +151,33 @@ class HierarchicalTree(nn.Module):
         print(f"  Leaf nodes: {sum(1 for n in self.all_nodes if n.is_leaf)}")
     
     def _build_tree(self, depth: int, max_depth: int, node_id: int) -> TreeNode:
-        """Recursively build the tree."""
+        """
+        Recursively build the tree with variable branching.
+
+        Structure:
+          Root (depth=0, hidden)
+            → 4 Nodes (depth=1)
+              → 3 Agents per Node (depth=2)
+                → 2 Sub-Agents per Agent (depth=3)
+        """
         node = TreeNode(self.embed_dim, self.embed_dim * 2)
         node.node_id = node_id
         node.level = depth
-        
+
         if depth < max_depth - 1:
-            for i in range(self.branching_factor):
-                child_id = node_id * self.branching_factor + i + 1
+            # Get branching factor for this level
+            if isinstance(self.branching_factor, list):
+                num_children = self.branching_factor[depth] if depth < len(self.branching_factor) else self.branching_factor[-1]
+            else:
+                num_children = self.branching_factor
+
+            # Create children
+            for i in range(num_children):
+                # Generate unique child ID
+                child_id = len(self.all_nodes) if hasattr(self, 'all_nodes') else node_id * 10 + i + 1
                 child = self._build_tree(depth + 1, max_depth, child_id)
                 node.add_child(child)
-        
+
         return node
     
     def _collect_nodes(self, node: TreeNode):
@@ -230,6 +253,127 @@ class HierarchicalTree(nn.Module):
             if node.node_id == node_id:
                 return node
         return None
+
+    def _get_node_gradient_norm(self, node: TreeNode) -> float:
+        """Get gradient norm for a specific node."""
+        total = 0.0
+        for p in node.parameters():
+            if p.grad is not None:
+                total += p.grad.norm().item()
+        return total
+
+    def find_responsible_path(self) -> List[Tuple[TreeNode, float]]:
+        """
+        Hierarchically drill down from Manager to find responsible agent path.
+
+        Returns:
+            List of (node, gradient_norm) from Manager → Agent → Sub-Agent
+        """
+        path = []
+        current = self.root
+
+        while not current.is_leaf:
+            grad = self._get_node_gradient_norm(current)
+            path.append((current, grad))
+
+            # Find child with highest gradient (responsible child)
+            if current.child_nodes:
+                child_grads = [
+                    (child, self._get_node_gradient_norm(child))
+                    for child in current.child_nodes
+                ]
+                culprit_child, _ = max(child_grads, key=lambda x: x[1])
+                current = culprit_child
+
+        # Add leaf (sub-agent culprit)
+        path.append((current, self._get_node_gradient_norm(current)))
+        return path
+
+    def get_proportional_scales(self, responsible_path: List[Tuple[TreeNode, float]]) -> dict:
+        """
+        Compute proportional update scales based on hierarchical responsibility.
+
+        Args:
+            responsible_path: Path from find_responsible_path()
+
+        Returns:
+            Dict mapping node_id to update scale (0.0 to 1.0)
+
+        Example:
+            Sub-Agent (culprit): 1.0 (100% update)
+            Agent (parent):      0.15 (15% update)
+            Manager (root):      0.05 (5% update)
+            Others:              0.0 (skip)
+        """
+        scales = {}
+        path_nodes = [node for node, _ in responsible_path]
+
+        for node in self.all_nodes:
+            if node == path_nodes[-1]:  # Culprit (deepest in path - sub-agent)
+                scales[node.node_id] = 1.0  # 100% update
+            elif len(path_nodes) > 1 and node == path_nodes[-2]:  # Parent (agent)
+                scales[node.node_id] = 0.15  # 15% update
+            elif node == path_nodes[0]:  # Manager (root)
+                scales[node.node_id] = 0.05  # 5% update
+            else:
+                scales[node.node_id] = 0.0  # Not in responsible path, skip
+
+        return scales
+
+    def apply_proportional_updates(self, scales: dict):
+        """
+        Scale gradients proportionally based on hierarchical responsibility.
+
+        Args:
+            scales: Dict from get_proportional_scales()
+        """
+        for node in self.all_nodes:
+            scale = scales.get(node.node_id, 0.0)
+            for p in node.parameters():
+                if p.grad is not None:
+                    p.grad.mul_(scale)
+
+    def print_responsibility_tree(self, grad_norms: dict, scales: dict, node: TreeNode = None, level: int = 0):
+        """
+        Print hierarchical responsibility visualization.
+
+        Args:
+            grad_norms: Dict of node_id -> gradient_norm
+            scales: Dict of node_id -> update_scale
+            node: Current node (defaults to root)
+            level: Current tree level
+        """
+        if node is None:
+            node = self.root
+
+        indent = "  " * level
+        node_id = node.node_id
+        grad = grad_norms.get(node_id, 0.0)
+        scale = scales.get(node_id, 0.0)
+
+        # Status icon based on update scale
+        if scale >= 0.8:
+            icon = "🚨"  # Culprit (Sub-Agent)
+        elif scale > 0:
+            icon = "⚠️"   # Parent/Manager
+        else:
+            icon = "✓"    # OK, not responsible
+
+        # Role name based on level
+        if level == 0:
+            role = "Root   "  # Hidden root
+        elif level == 1:
+            role = "Node   "  # Top-level Nodes
+        elif level == 2:
+            role = "Agent  "  # Agents within Nodes
+        else:
+            role = "SubAgent"  # Sub-Agents within Agents
+
+        print(f"{indent}{icon} {role} {node_id}: grad={grad:.3f}, update={scale*100:3.0f}%")
+
+        # Recursively print children
+        for child in node.child_nodes:
+            self.print_responsibility_tree(grad_norms, scales, child, level + 1)
 
 
 class HierarchicalK1Trainer:
@@ -333,31 +477,28 @@ class HierarchicalK1Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
             # ============================================
-            # PATH-BASED SPARSE UPDATES (OPTIMIZED)
+            # HIERARCHICAL ERROR ATTRIBUTION
             # ============================================
             with torch.no_grad():
-                # OPTIMIZATION: Fast gradient norm computation
-                grad_norms = {}
-                for node in self.model.all_nodes:
-                    total_norm = 0.0
-                    for p in node.parameters():
-                        if p.grad is not None:
-                            # Use GPU-optimized norm computation
-                            total_norm += p.grad.norm().item()
-                    grad_norms[node.node_id] = total_norm
+                # Step 1: Hierarchically drill down to find responsible path
+                #         Manager → Agent X → Sub-Agent Y
+                responsible_path = self.model.find_responsible_path()
 
-                # OPTIMIZATION: Use partial sort instead of full sort
-                top_k = min(self.top_k_nodes, len(grad_norms))
-                import heapq
-                top_k_nodes_ids = heapq.nlargest(top_k, grad_norms, key=grad_norms.get)
-                nodes_to_update = set(top_k_nodes_ids)
+                # Step 2: Compute proportional update scales
+                #         Sub-Agent: 100%, Agent: 15%, Manager: 5%, Others: 0%
+                scales = self.model.get_proportional_scales(responsible_path)
 
-                # Zero gradients for nodes NOT in top-k
-                for node in self.model.all_nodes:
-                    if node.node_id not in nodes_to_update:
-                        for p in node.parameters():
-                            if p.grad is not None:
-                                p.grad.zero_()
+                # Step 3: Apply scaled gradients (proportional updates!)
+                self.model.apply_proportional_updates(scales)
+
+                # Track which nodes are updated
+                nodes_to_update = [nid for nid, scale in scales.items() if scale > 0]
+
+                # Compute gradient norms for logging
+                grad_norms = {
+                    node.node_id: self.model._get_node_gradient_norm(node)
+                    for node in self.model.all_nodes
+                }
 
             # Optimizer step
             self.scaler.step(self.optimizer)
@@ -373,13 +514,26 @@ class HierarchicalK1Trainer:
                 elapsed = time.time() - start_time
                 speed = (step + 1) / elapsed if elapsed > 0 else 0
 
-                # Show which nodes were updated
-                updated_str = ",".join(str(n) for n in sorted(nodes_to_update))
+                # Print hierarchical error attribution
+                print(f"\n[{step:6d}] Loss: {avg_loss:.4f} | Speed: {speed:.1f} step/s")
+                print("─" * 60)
+                print("Hierarchical Error Attribution:")
+                self.model.print_responsibility_tree(grad_norms, scales)
 
-                print(f"[{step:6d}] Loss: {avg_loss:.4f} | "
-                      f"Updated: {top_k}/{len(self.model.all_nodes)} nodes | "
-                      f"Nodes: [{updated_str}] | "
-                      f"Speed: {speed:.1f} step/s")
+                # Show responsible path
+                path_str = " → ".join(
+                    f"Node{node.node_id}(g={grad:.2f})"
+                    for node, grad in responsible_path
+                )
+                print(f"\nError Path: {path_str}")
+
+                # Summary
+                num_updated = len(nodes_to_update)
+                num_total = len(self.model.all_nodes)
+                pct_updated = (num_updated / num_total * 100) if num_total > 0 else 0
+                print(f"Updated: {num_updated}/{num_total} nodes ({pct_updated:.0f}%) | "
+                      f"Preserved: {num_total - num_updated} nodes ({100-pct_updated:.0f}%)")
+                print("─" * 60)
         
         elapsed = time.time() - start_time
         print(f"\nTraining complete: {max_steps} steps in {elapsed:.1f}s")
