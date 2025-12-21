@@ -50,7 +50,7 @@ class TreeNode(nn.Module):
         
         # Router to children (if not leaf)
         self.router = None  # Set by parent
-        self.children: List['TreeNode'] = []
+        self.child_nodes: List['TreeNode'] = []  # Renamed to avoid PyTorch conflict
         self.is_leaf = True
         
         # For tracking
@@ -74,7 +74,7 @@ class TreeNode(nn.Module):
     
     def add_child(self, child: 'TreeNode'):
         """Add a child node."""
-        self.children.append(child)
+        self.child_nodes.append(child)
         self.is_leaf = False
         child.level = self.level + 1
     
@@ -160,7 +160,7 @@ class HierarchicalTree(nn.Module):
     def _collect_nodes(self, node: TreeNode):
         """Collect all nodes into a list."""
         self.all_nodes.append(node)
-        for child in node.children:
+        for child in node.child_nodes:
             self._collect_nodes(child)
     
     def _init_weights(self):
@@ -204,17 +204,17 @@ class HierarchicalTree(nn.Module):
         # Process through this node
         x = node(x, mask)
         path.append(node)
-        
+
         # If has children, process through them (combine outputs)
-        if node.children:
+        if node.child_nodes:
             child_outputs = []
-            for child in node.children:
+            for child in node.child_nodes:
                 child_out = self._forward_node(x, child, mask, path)
                 child_outputs.append(child_out)
-            
+
             # Average child outputs (can be changed to routing later)
             x = torch.stack(child_outputs, dim=0).mean(dim=0)
-        
+
         return x
     
     def get_path_gradient_norms(self) -> dict:

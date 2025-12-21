@@ -104,6 +104,7 @@ class BaselineTrainer:
 
         loss_fn = nn.CrossEntropyLoss()
         batch_size = self.config['learning'].get('batch_size', 32)
+        print(f"🔍 BATCH SIZE: {batch_size}")  # DEBUG
         start_time = time.time()
         last_log_time = start_time
         last_log_step = 0
@@ -204,7 +205,12 @@ def main():
 
     # Enable PyTorch optimizations
     torch.backends.cudnn.benchmark = True  # Auto-tune for your GPU
-    
+    torch.backends.cuda.matmul.allow_tf32 = True  # Enable TensorFloat32
+    torch.backends.cudnn.allow_tf32 = True
+
+    print(f"🔍 DEBUG: Batch size set to {config['learning']['batch_size']}")
+    print(f"🔍 DEBUG: CuDNN benchmark: {torch.backends.cudnn.benchmark}")
+
     # Run for 1 epoch per dataset
     
     # Load datasets
