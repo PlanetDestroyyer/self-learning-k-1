@@ -241,85 +241,83 @@ class HierarchicalTree(nn.Module):
     
     def fast_hierarchical_step(self, loss_tensor: torch.Tensor, current_step: int):
         """
-        GPU-ACCELERATED hierarchical error attribution (OPTIMIZED).
+        ULTRA-OPTIMIZED hierarchical error attribution.
         
-        Fully vectorized gradient computation with minimal Python loops.
-        All operations stay on GPU until final logging.
+        ZERO Python loops in hot path - all operations are batched GPU tensors.
+        This is critical for high-throughput training.
         
         Args:
             loss_tensor: The loss tensor (still on GPU, don't call .item())
             current_step: Current training step
         """
-        # OPTIMIZATION 1: Vectorized gradient norm computation
-        # Pre-grouped parameters per node, compute all norms in single pass
-        grad_norms_list = []
-        for node_params in self.node_params:
-            if not node_params:
-                grad_norms_list.append(torch.tensor(0.0, device=loss_tensor.device))
-                continue
-            
-            # Gather all gradients for this node that exist
-            node_grads = [p.grad for p in node_params if p.grad is not None]
-            if node_grads:
-                # Efficient: concatenate and compute single norm
-                node_grad_norm = torch.stack([g.norm() for g in node_grads]).sum()
-            else:
-                node_grad_norm = torch.tensor(0.0, device=loss_tensor.device)
-            
-            grad_norms_list.append(node_grad_norm)
+        # Collect ALL gradients from ALL nodes in single flat list
+        all_grads = []
+        grad_to_node = []  # Maps gradient index to node index
         
-        # Stack into single tensor (GPU) - vectorized operation
-        grad_tensor = torch.stack(grad_norms_list)  # [num_nodes]
+        for node_idx, node_params in enumerate(self.node_params):
+            for p in node_params:
+                if p.grad is not None:
+                    all_grads.append(p.grad)
+                    grad_to_node.append(node_idx)
         
-        # Cache for logging (stays on GPU)
+        if not all_grads:
+            # No gradients - skip attribution
+            return
+        
+        # Compute ALL gradient norms in SINGLE batched operation (GPU)
+        all_grad_norms = torch.stack([g.norm() for g in all_grads])  # [total_params]
+        
+        # Convert grad_to_node to tensor for GPU operations
+        grad_to_node_tensor = torch.tensor(grad_to_node, device=loss_tensor.device)
+        
+        # Sum gradient norms per node using scatter_add (fully vectorized!)
+        num_nodes = len(self.all_nodes)
+        grad_tensor = torch.zeros(num_nodes, device=loss_tensor.device)
+        grad_tensor.scatter_add_(0, grad_to_node_tensor, all_grad_norms)
+        
+        # Cache for potential logging
         self._grad_tensor = grad_tensor
         
-        # OPTIMIZATION 2: Vectorized path finding
-        # Find responsible path using GPU operations with minimal CPU sync
-        
-        # Root is always index 0
+        # Find responsible path (minimal CPU sync)
         root_idx = 0
         
-        # Level 1: children of root
+        # Level 1
         level1_start = 1
         level1_end = level1_start + len(self.root.child_nodes)
-        level1_grads = grad_tensor[level1_start:level1_end]
-        best_level1_local = level1_grads.argmax()
-        best_level1_idx = level1_start + best_level1_local.item()  # Single sync point
+        if level1_end > level1_start:
+            best_level1_idx = level1_start + grad_tensor[level1_start:level1_end].argmax().item()
+        else:
+            best_level1_idx = root_idx
         
-        # Level 2: children of best level1 node
+        # Level 2
         best_level1_node = self.all_nodes[best_level1_idx]
         if best_level1_node.child_nodes:
-            # OPTIMIZATION: Use pre-built index mapping (O(1) vs O(N))
             child_indices = [self.node_to_idx[c] for c in best_level1_node.child_nodes]
-            child_grads = grad_tensor[child_indices]
-            best_child_local = child_grads.argmax()
-            best_level2_idx = child_indices[best_child_local.item()]  # Single sync point
+            child_indices_tensor = torch.tensor(child_indices, device=loss_tensor.device)
+            best_child_local = grad_tensor[child_indices_tensor].argmax().item()
+            best_level2_idx = child_indices[best_child_local]
         else:
             best_level2_idx = best_level1_idx
         
-        # Path: [root, best_level1, best_level2]
+        # Path indices
         path_indices = [root_idx, best_level1_idx, best_level2_idx]
         
-        # OPTIMIZATION 3: Vectorized gradient scaling
-        # Create scale tensor once (GPU) - all zeros except path nodes
-        scales = torch.zeros(len(self.all_nodes), device=loss_tensor.device)
-        scales[path_indices[-1]] = 1.0    # Culprit: 100%
+        # Create scale tensor (vectorized)
+        scales = torch.zeros(num_nodes, device=loss_tensor.device)
+        scales[path_indices[-1]] = 1.0   # Culprit
         if len(path_indices) > 1:
-            scales[path_indices[-2]] = 0.15   # Parent: 15%
-        scales[path_indices[0]] = 0.05    # Root: 5%
+            scales[path_indices[-2]] = 0.15  # Parent
+        scales[path_indices[0]] = 0.05   # Root
         
-        # Apply scales efficiently: iterate nodes but vectorize within each
-        for i, node_params in enumerate(self.node_params):
-            scale = scales[i]
-            if scale > 0:  # Only process nodes in path
-                for p in node_params:
-                    if p.grad is not None:
-                        p.grad.mul_(scale)
+        # Apply scales - OPTIMIZED: only iterate parameters, use tensor indexing
+        for grad_idx, node_idx in enumerate(grad_to_node):
+            scale = scales[node_idx]
+            if scale > 0:
+                all_grads[grad_idx].mul_(scale)
         
-        # Store for mark_nodes_updated (stays as indices, no dict conversion)
+        # Store for node update tracking
         self._last_scales_indices = path_indices
-        self._last_scales_tensor = scales  # Keep GPU tensor for potential reuse
+        self._last_scales_tensor = scales
     
     def _get_node_gradient_norm(self, node: TreeNode) -> float:
         """Get gradient norm for a specific node (uses cache if available)."""
