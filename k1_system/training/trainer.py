@@ -132,19 +132,20 @@ class HierarchicalK1Trainer:
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
+            # Cache gradient norms ONCE (optimization)
+            self.model.cache_all_gradient_norms()
+            
+            # Get loss value once (avoid multiple GPU syncs)
+            loss_val = loss.item()
+
             # Hierarchical error attribution
             with torch.no_grad():
                 responsible_path = self.model.find_responsible_path(
-                    loss=loss.item(),
+                    loss=loss_val,
                     current_step=step
                 )
                 scales = self.model.get_proportional_scales(responsible_path)
                 self.model.apply_proportional_updates(scales)
-                nodes_to_update = [nid for nid, scale in scales.items() if scale > 0]
-                grad_norms = {
-                    node.node_id: self.model._get_node_gradient_norm(node)
-                    for node in self.model.all_nodes
-                }
 
             # Optimizer step
             self.scaler.step(self.optimizer)
@@ -156,8 +157,11 @@ class HierarchicalK1Trainer:
             # Accumulate loss
             total_loss += loss.detach()
             
-            # Logging
+            # Logging (only compute expensive things when logging)
             if step % self.log_interval == 0:
+                # Get grad norms from cache (already computed)
+                grad_norms = self.model._grad_norm_cache.copy()
+                nodes_to_update = [nid for nid, scale in scales.items() if scale > 0]
                 self._log_progress(
                     step, total_loss, start_time, 
                     responsible_path, scales, grad_norms, nodes_to_update

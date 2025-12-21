@@ -1,22 +1,6 @@
-"""
-HierarchicalTree: The main K-1 tree structure for language modeling.
-
-Architecture:
-                    ROOT (Manager)
-                         |
-         ┌───────────────┼───────────────┐
-         |               |               |
-      Node 1          Node 2          Node 3
-         |               |               |
-    ┌────┼────┐     ┌────┼────┐    ┌────┼────┐
-   L1   L2   L3    L4   L5   L6   L7   L8   L9
-
-Data flows DOWN through the tree, gradients flow UP.
-Only the PATH responsible for errors gets updated.
-"""
-
 import torch
 import torch.nn as nn
+import math
 from typing import List, Tuple, Optional
 
 from .tree_node import TreeNode
@@ -76,6 +60,9 @@ class HierarchicalTree(nn.Module):
         self.tree_depth = tree_depth
         self.max_seq_len = max_seq_len
         self.dropout = dropout
+        
+        # Gradient norm cache (optimization)
+        self._grad_norm_cache: dict = {}
 
         # Support variable branching: [4 nodes, 3 agents, 2 sub-agents]
         if branching_factor is None:
@@ -214,15 +201,35 @@ class HierarchicalTree(nn.Module):
         return x
     
     # ========================================
-    # Responsibility Signal Methods
+    # Responsibility Signal Methods (OPTIMIZED)
     # ========================================
     
+    def cache_all_gradient_norms(self):
+        """Cache gradient norms for all nodes (call once per step)."""
+        self._grad_norm_cache = {}
+        for node in self.all_nodes:
+            total = 0.0
+            for p in node.parameters():
+                if p.grad is not None:
+                    total += p.grad.norm().item()
+            # NaN protection
+            if math.isnan(total) or math.isinf(total):
+                total = 0.0001
+            self._grad_norm_cache[node.node_id] = total
+    
     def _get_node_gradient_norm(self, node: TreeNode) -> float:
-        """Get gradient norm for a specific node."""
+        """Get gradient norm for a specific node (uses cache if available)."""
+        if node.node_id in self._grad_norm_cache:
+            return self._grad_norm_cache[node.node_id]
+        
+        # Fallback: compute directly
         total = 0.0
         for p in node.parameters():
             if p.grad is not None:
                 total += p.grad.norm().item()
+        # NaN protection
+        if math.isnan(total) or math.isinf(total):
+            total = 0.0001
         return total
 
     def compute_responsibility(
@@ -237,18 +244,12 @@ class HierarchicalTree(nn.Module):
         Compute responsibility score for a node.
         
         responsibility = gradient × loss × cooldown_penalty
-        
-        Args:
-            node: The node to compute responsibility for
-            loss: Current batch loss value
-            current_step: Current training step
-            cooldown_steps: Steps before cooldown expires
-            penalty: Minimum multiplier for recently-updated nodes
-        
-        Returns:
-            Responsibility score (higher = more responsible for error)
         """
         grad = self._get_node_gradient_norm(node)
+        
+        # NaN protection for loss
+        if math.isnan(loss) or math.isinf(loss):
+            loss = 1.0
         
         # Cooldown penalty: recently updated nodes get lower responsibility
         steps_since_update = current_step - node.last_updated_step
@@ -257,7 +258,13 @@ class HierarchicalTree(nn.Module):
         else:
             cooldown_factor = 1.0
         
-        return grad * loss * cooldown_factor
+        result = grad * loss * cooldown_factor
+        
+        # Final NaN protection
+        if math.isnan(result) or math.isinf(result):
+            result = 0.0001
+        
+        return result
 
     def find_responsible_path(
         self, 
@@ -268,13 +275,6 @@ class HierarchicalTree(nn.Module):
         Hierarchically drill down from Manager to find responsible agent path.
         
         Uses improved responsibility signal: gradient × loss × cooldown_penalty
-
-        Args:
-            loss: Current batch loss value (higher = weight responsibility more)
-            current_step: Current training step (for cooldown calculation)
-
-        Returns:
-            List of (node, responsibility_score) from Manager → Agent → Sub-Agent
         """
         path = []
         current = self.root
@@ -283,32 +283,29 @@ class HierarchicalTree(nn.Module):
             resp = self.compute_responsibility(current, loss, current_step)
             path.append((current, resp))
 
-            # Find child with highest responsibility
+            # Find child with highest responsibility (optimized: no list creation)
             if current.child_nodes:
-                child_resps = [
-                    (child, self.compute_responsibility(child, loss, current_step))
-                    for child in current.child_nodes
-                ]
-                culprit_child, _ = max(child_resps, key=lambda x: x[1])
-                current = culprit_child
+                best_child = current.child_nodes[0]
+                best_resp = self.compute_responsibility(best_child, loss, current_step)
+                for child in current.child_nodes[1:]:
+                    child_resp = self.compute_responsibility(child, loss, current_step)
+                    if child_resp > best_resp:
+                        best_child = child
+                        best_resp = child_resp
+                current = best_child
 
         # Add leaf (sub-agent culprit)
         path.append((current, self.compute_responsibility(current, loss, current_step)))
         return path
 
     def mark_nodes_updated(self, scales: dict, current_step: int):
-        """
-        Mark nodes that received updates with current step.
-        
-        This enables the trust cooldown mechanism.
-        
-        Args:
-            scales: Dict of node_id -> update_scale
-            current_step: Current training step
-        """
-        for node in self.all_nodes:
-            if scales.get(node.node_id, 0.0) > 0:
-                node.last_updated_step = current_step
+        """Mark nodes that received updates (optimized: only iterate path)."""
+        # Only update nodes that actually got scaled (usually 3)
+        for node_id, scale in scales.items():
+            if scale > 0:
+                node = self.get_node_by_id(node_id)
+                if node:
+                    node.last_updated_step = current_step
 
     def get_proportional_scales(
         self, 
