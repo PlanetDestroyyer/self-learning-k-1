@@ -75,7 +75,10 @@ class HierarchicalK1Trainer:
             print(f"✅ DataParallel enabled (~{self.num_gpus * 0.9:.1f}x speedup)")
         
         # Compile model for speed (PyTorch 2.0+) - AFTER DataParallel
-        if hasattr(torch, 'compile') and device.type == 'cuda':
+        # TEMPORARILY DISABLED: torch.compile causing graph breaks and recompilation
+        # The hierarchical error attribution uses dynamic control flow that breaks graphs
+        # TODO: Add @torch.compiler.disable_in_graph decorators to fix this
+        if False and hasattr(torch, 'compile') and device.type == 'cuda':
             try:
                 self.model = torch.compile(self.model, mode='reduce-overhead')
                 print("✅ torch.compile() enabled (20-40% faster)")
