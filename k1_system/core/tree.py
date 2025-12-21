@@ -250,10 +250,6 @@ class HierarchicalTree(nn.Module):
             loss_tensor: The loss tensor (still on GPU, don't call .item())
             current_step: Current training step
         """
-        # TEMPORARY: Skip hierarchical attribution to test baseline speed
-        # If this makes training fast, we know the attribution is the bottleneck
-        return  # ← Remove this line once we confirm
-        
         # Collect ALL gradients from ALL nodes in single flat list
         all_grads = []
         grad_to_node = []  # Maps gradient index to node index
