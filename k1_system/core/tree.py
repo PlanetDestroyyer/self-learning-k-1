@@ -280,7 +280,8 @@ class HierarchicalTree(nn.Module):
         
         # COOLDOWN ENFORCEMENT: Prevent rich-get-richer
         # Zero out gradients for nodes in cooldown period
-        COOLDOWN_STEPS = 100  # Node blocked for 100 steps after update
+        COOLDOWN_STEPS = 10  # REDUCED: Faster rotation (was 100)
+        EPSILON = 0.1  # 10% random selection for exploration
         cooldown_mask = torch.ones(num_nodes, device=loss_tensor.device)
         
         for idx, node in enumerate(self.all_nodes):
@@ -296,31 +297,44 @@ class HierarchicalTree(nn.Module):
         # Find responsible path using FILTERED gradients (respects cooldown)
         root_idx = 0
         
-        # Level 1: Select from non-cooldown nodes
+        # Level 1: Select with epsilon-greedy exploration
         level1_start = 1
         level1_end = level1_start + len(self.root.child_nodes)
         if level1_end > level1_start:
             level1_grads = grad_tensor_filtered[level1_start:level1_end]
-            # If all nodes in cooldown, use unfiltered (fallback)
-            if level1_grads.sum() > 0:
+            level1_mask = cooldown_mask[level1_start:level1_end]
+            
+            # 10% random, 90% greedy
+            if torch.rand(1).item() < EPSILON and level1_mask.sum() > 0:
+                available = torch.where(level1_mask > 0)[0]
+                rand_idx = available[torch.randint(0, len(available), (1,)).item()]
+                best_level1_idx = level1_start + rand_idx.item()
+            elif level1_grads.sum() > 0:
                 best_level1_idx = level1_start + level1_grads.argmax().item()
             else:
                 best_level1_idx = level1_start + grad_tensor[level1_start:level1_end].argmax().item()
         else:
             best_level1_idx = root_idx
         
-        # Level 2: Select from non-cooldown children
+        # Level 2: Select with epsilon-greedy exploration  
         best_level1_node = self.all_nodes[best_level1_idx]
         if best_level1_node.child_nodes:
             child_indices = [self.node_to_idx[c] for c in best_level1_node.child_nodes]
             child_indices_tensor = torch.tensor(child_indices, device=loss_tensor.device)
             child_grads_filtered = grad_tensor_filtered[child_indices_tensor]
-            # If all children in cooldown, use unfiltered (fallback)
-            if child_grads_filtered.sum() > 0:
+            child_mask = cooldown_mask[child_indices_tensor]
+            
+            # 10% random, 90% greedy
+            if torch.rand(1).item() < EPSILON and child_mask.sum() > 0:
+                available = torch.where(child_mask > 0)[0]
+                rand_idx = available[torch.randint(0, len(available), (1,)).item()]
+                best_level2_idx = child_indices[rand_idx.item()]
+            elif child_grads_filtered.sum() > 0:
                 best_child_local = child_grads_filtered.argmax().item()
+                best_level2_idx = child_indices[best_child_local]
             else:
                 best_child_local = grad_tensor[child_indices_tensor].argmax().item()
-            best_level2_idx = child_indices[best_child_local]
+                best_level2_idx = child_indices[best_child_local]
         else:
             best_level2_idx = best_level1_idx
         
