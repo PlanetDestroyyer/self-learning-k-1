@@ -75,6 +75,52 @@ class TreeNode(nn.Module):
         self.gradient_norm: float = 0.0
         self.last_updated_step: int = -1000  # For trust cooldown
         self.update_count: int = 0  # Track total updates for analysis
+        
+        # Specialization tracking (for interpretability)
+        self.token_counts = {}  # {token_id: count} - track which tokens this node handles
+        self.error_sum = 0.0  # Sum of errors when this node was culprit
+        self.specialization_label = None  # Human-readable label (e.g., "nouns", "verbs")
+    
+    def record_tokens(self, token_ids: torch.Tensor):
+        """
+        Record which tokens this node processed when it was the culprit.
+        
+        Args:
+            token_ids: Tensor of token IDs that caused errors
+        """
+        for tid in token_ids.flatten().tolist():
+            self.token_counts[tid] = self.token_counts.get(tid, 0) + 1
+    
+    def get_top_tokens(self, n: int = 10) -> list:
+        """
+        Get the top N tokens this node handles most often.
+        
+        Args:
+            n: Number of top tokens to return
+            
+        Returns:
+            List of (token_id, count) tuples
+        """
+        sorted_tokens = sorted(self.token_counts.items(), key=lambda x: -x[1])
+        return sorted_tokens[:n]
+    
+    def get_specialization_score(self) -> dict:
+        """
+        Get a summary of this node's specialization.
+        
+        Returns:
+            Dictionary with specialization metrics
+        """
+        total = sum(self.token_counts.values())
+        return {
+            'node_id': self.node_id,
+            'level': self.level,
+            'update_count': self.update_count,
+            'unique_tokens': len(self.token_counts),
+            'total_tokens': total,
+            'top_tokens': self.get_top_tokens(5),
+            'label': self.specialization_label
+        }
     
     def forward(
         self, 

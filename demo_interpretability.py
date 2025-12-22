@@ -106,8 +106,28 @@ def print_node_statistics(model):
     print(f"Total updates: {total}")
 
 
+def print_specialization_analysis(model, loader, top_n=5):
+    """Print which tokens each node specializes in."""
+    print("\n" + "=" * 70)
+    print("NODE SPECIALIZATION ANALYSIS")
+    print("=" * 70)
+    print("\nWhat does each node 'specialize' in? (tokens it handles most)")
+    
+    # Only show leaf nodes with data
+    for node in model.all_nodes:
+        if node.is_leaf and node.token_counts:
+            top_tokens = node.get_top_tokens(top_n)
+            if top_tokens:
+                print(f"\n  Node {node.node_id} (Leaf):")
+                print(f"    Updates: {node.update_count}, Unique tokens: {len(node.token_counts)}")
+                print(f"    Top tokens handled:")
+                for tid, count in top_tokens:
+                    word = loader.decode([tid]) if hasattr(loader, 'decode') else f"[{tid}]"
+                    print(f"      '{word}': {count} times")
+
+
 def run_demo(steps=5000, log_interval=500, verbose_interval=1000):
-    """Run the interpretability demo."""
+    """Run the interpretability demo with 41-node tree."""
     
     print_header()
     
@@ -117,21 +137,22 @@ def run_demo(steps=5000, log_interval=500, verbose_interval=1000):
     print(f"  Vocabulary: {loader.vocab_size} words")
     print(f"  Training sequences: {len(loader.train_data)}")
     
-    # Create model
-    print("\nCreating K-1 Hierarchical Tree...")
+    # Create model with DEEPER TREE (41 nodes as per README)
+    print("\nCreating K-1 Hierarchical Tree (41 nodes)...")
     model = HierarchicalTree(
         vocab_size=loader.vocab_size,
         embed_dim=128,
         ff_dim=256,
         num_heads=4,
-        tree_depth=3,
-        branching_factor=[3, 3]
+        tree_depth=4,              # Depth 4: Root → Nodes → Agents → Sub-Agents
+        branching_factor=[4, 3, 2]  # 4 Nodes, 3 Agents each, 2 Sub-Agents each
     )
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device)
     print(f"  Device: {device}")
-    print(f"  Total nodes: {len(model.all_nodes)}")
+    print(f"  Total nodes: {len(model.all_nodes)} (was 13, now 41 for finer attribution)")
+    print(f"  Tree structure: 1 Root + 4 Nodes + 12 Agents + 24 Sub-Agents")
     print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Training setup
@@ -164,12 +185,17 @@ def run_demo(steps=5000, log_interval=500, verbose_interval=1000):
         # K-1 Error Attribution
         model.fast_hierarchical_step(loss, step)
         
-        # Track updates
+        # Track updates and specialization
         track_node_updates(model)
         
-        # Record culprit
+        # Record culprit and its tokens (for specialization tracking)
         if hasattr(model, '_error_path'):
-            culprit_history.append(model._error_path[-1])
+            culprit_idx = model._error_path[-1]
+            culprit_history.append(culprit_idx)
+            
+            # Record which tokens this culprit node handled
+            culprit_node = model.all_nodes[culprit_idx]
+            culprit_node.record_tokens(y)  # Track target tokens for this error
         
         # Gradient clipping and optimizer step
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -205,15 +231,21 @@ def run_demo(steps=5000, log_interval=500, verbose_interval=1000):
     print("\nWhich nodes were identified as 'culprit' most often?")
     print(f"\n{'Node':<10} {'Times Culprit':<15} {'Share':<10}")
     print("-" * 40)
-    for node_idx, count in culprit_counts.most_common():
+    for node_idx, count in culprit_counts.most_common(10):  # Top 10
         share = count / len(culprit_history) * 100
         print(f"Node {node_idx:<4} {count:<15} {share:>5.1f}%")
     
+    # NEW: Specialization analysis
+    print_specialization_analysis(model, loader, top_n=5)
+    
     print("\n" + "=" * 70)
-    print("KEY TAKEAWAY: Unlike traditional backprop, K-1 tells you")
-    print("EXACTLY which node caused each error. This is interpretability!")
+    print("KEY TAKEAWAYS:")
+    print("1. K-1 traces errors to specific nodes (INTERPRETABILITY)")
+    print("2. Deeper tree (41 nodes) = finer-grained attribution")
+    print("3. Each node develops specialization over time")
     print("=" * 70)
 
 
 if __name__ == '__main__':
     run_demo(steps=5000, log_interval=500, verbose_interval=1000)
+
