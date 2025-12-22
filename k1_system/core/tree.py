@@ -241,12 +241,14 @@ class HierarchicalTree(nn.Module):
     
     def fast_hierarchical_step(self, loss_tensor: torch.Tensor, current_step: int):
         """
-        ULTRA-OPTIMIZED hierarchical error attribution with MoE-style load balancing.
+        Hierarchical error attribution - trace errors through the tree.
         
-        FIXES FOR RICH-GET-RICHER PROBLEM:
-        1. Usage-inverse weighting: Less-used nodes get selection priority
-        2. Temperature-based soft selection: Probabilistic sampling instead of argmax
-        3. Auxiliary load balance loss: Penalty for imbalanced distribution
+        Core K-1 Innovation:
+        1. Compute gradients for all nodes
+        2. Find which node has highest gradient (most responsible for error)
+        3. Apply proportional updates: Culprit=100%, Parent=15%, Root=5%
+        
+        This provides INTERPRETABILITY - know exactly which node caused the error.
         
         Args:
             loss_tensor: The loss tensor (still on GPU, don't call .item())
@@ -263,182 +265,99 @@ class HierarchicalTree(nn.Module):
                     grad_to_node.append(node_idx)
         
         if not all_grads:
-            # No gradients - skip attribution
             return
         
         # Compute ALL gradient norms in SINGLE batched operation (GPU)
-        all_grad_norms = torch.stack([g.norm() for g in all_grads])  # [total_params]
+        all_grad_norms = torch.stack([g.norm() for g in all_grads])
         
-        # Convert grad_to_node to tensor for GPU operations
-        grad_to_node_tensor = torch.tensor(grad_to_node, device=loss_tensor.device)
-        
-        # Sum gradient norms per node using scatter_add (fully vectorized!)
+        # Sum gradient norms per node using scatter_add (vectorized)
         num_nodes = len(self.all_nodes)
+        grad_to_node_tensor = torch.tensor(grad_to_node, device=loss_tensor.device)
         grad_tensor = torch.zeros(num_nodes, device=loss_tensor.device)
         grad_tensor.scatter_add_(0, grad_to_node_tensor, all_grad_norms)
         
-        # Cache for potential logging and auxiliary loss
+        # Cache for interpretability logging
         self._grad_tensor = grad_tensor
         
         # ========================================
-        # MoE-STYLE LOAD BALANCING (TUNED FOR FULL TREE EXPLORATION)
+        # HIERARCHICAL ERROR ATTRIBUTION
+        # Find responsible path: Root → Node → Agent (culprit)
         # ========================================
         
-        # 1. USAGE-INVERSE WEIGHTING: Strongly penalize frequently-updated nodes
-        # Score = gradient_norm × (1 / (update_count + 1))^β
-        USAGE_PENALTY_BETA = 1.0  # Linear penalty (1.0 = linear, was 0.5)
-        usage_counts = torch.tensor(
-            [max(1, getattr(n, 'update_count', 0) + 1) for n in self.all_nodes],
-            device=loss_tensor.device, dtype=torch.float32
-        )
-        usage_penalty = 1.0 / (usage_counts ** USAGE_PENALTY_BETA)
-        
-        # 2. UCB-STYLE EXPLORATION BONUS for underexplored nodes
-        # Bonus = C × sqrt(ln(total_steps + 1) / (node_updates + 1))
-        UCB_C = 0.5  # Exploration coefficient
-        total_steps = current_step + 1
-        exploration_bonus = UCB_C * torch.sqrt(
-            torch.log(torch.tensor(total_steps + 1, device=loss_tensor.device, dtype=torch.float32)) 
-            / usage_counts
-        )
-        
-        # Combine gradient signal with usage penalty and exploration bonus
-        # Normalize gradient tensor to prevent domination
-        grad_normalized = grad_tensor / (grad_tensor.max() + 1e-8)
-        weighted_grads = grad_normalized * usage_penalty + exploration_bonus
-        
-        # 3. COOLDOWN ENFORCEMENT - longer to force branch rotation
-        COOLDOWN_STEPS = 50  # Back to 50 to force more rotation
-        cooldown_mask = torch.ones(num_nodes, device=loss_tensor.device)
-        
-        for idx, node in enumerate(self.all_nodes):
-            if hasattr(node, 'last_updated_step'):
-                steps_since_update = current_step - node.last_updated_step
-                if steps_since_update < COOLDOWN_STEPS:
-                    cooldown_mask[idx] = 0.0
-        
-        # Apply cooldown mask
-        weighted_grads_filtered = weighted_grads * cooldown_mask
-        
-        # 4. TEMPERATURE-BASED SOFT SELECTION
-        # Higher temperature = more random, lower = more greedy
-        TEMP_START = 3.0  # Start with MORE exploration (was 2.0)
-        TEMP_END = 0.5    # End with less greed (was 0.3)
-        TEMP_ANNEAL_STEPS = 50000  # Longer annealing (was 30000)
-        temperature = max(TEMP_END, TEMP_START - (TEMP_START - TEMP_END) * current_step / TEMP_ANNEAL_STEPS)
-        
-        # Find responsible path using SOFT SELECTION
         root_idx = 0
         
-        # Level 1: Soft selection among root's ACTUAL children (using node_to_idx)
-        # CRITICAL FIX: Don't assume contiguous indices - use actual child indices!
+        # Level 1: Find node with highest gradient among root's children
         level1_child_indices = [self.node_to_idx[c] for c in self.root.child_nodes]
         
         if len(level1_child_indices) > 0:
-            level1_indices_tensor = torch.tensor(level1_child_indices, device=loss_tensor.device)
-            level1_scores = weighted_grads_filtered[level1_indices_tensor]
-            level1_mask = cooldown_mask[level1_indices_tensor]
-            
-            if level1_scores.sum() > 0 and level1_mask.sum() > 0:
-                # Softmax with temperature for probabilistic selection
-                level1_probs = torch.softmax(level1_scores / temperature, dim=0)
-                # Zero out cooled-down nodes
-                level1_probs = level1_probs * level1_mask
-                if level1_probs.sum() > 0:
-                    level1_probs = level1_probs / level1_probs.sum()  # Renormalize
-                    selected_local = torch.multinomial(level1_probs, 1).item()
-                else:
-                    selected_local = torch.randint(0, len(level1_child_indices), (1,)).item()
-                best_level1_idx = level1_child_indices[selected_local]
-            else:
-                # Fallback: random selection among available
-                available = torch.where(level1_mask > 0)[0]
-                if len(available) > 0:
-                    rand_local = available[torch.randint(0, len(available), (1,)).item()].item()
-                    best_level1_idx = level1_child_indices[rand_local]
-                else:
-                    best_level1_idx = level1_child_indices[torch.randint(0, len(level1_child_indices), (1,)).item()]
+            level1_grads = grad_tensor[torch.tensor(level1_child_indices, device=loss_tensor.device)]
+            best_local = level1_grads.argmax().item()
+            best_level1_idx = level1_child_indices[best_local]
         else:
             best_level1_idx = root_idx
         
-        # Level 2: Soft selection among level1's ACTUAL children
+        # Level 2: Find agent with highest gradient among selected node's children
         best_level1_node = self.all_nodes[best_level1_idx]
         if best_level1_node.child_nodes:
             child_indices = [self.node_to_idx[c] for c in best_level1_node.child_nodes]
-            child_indices_tensor = torch.tensor(child_indices, device=loss_tensor.device)
-            child_scores = weighted_grads_filtered[child_indices_tensor]
-            child_mask = cooldown_mask[child_indices_tensor]
-            
-            if child_scores.sum() > 0 and child_mask.sum() > 0:
-                child_probs = torch.softmax(child_scores / temperature, dim=0)
-                child_probs = child_probs * child_mask
-                if child_probs.sum() > 0:
-                    child_probs = child_probs / child_probs.sum()
-                    selected_child = torch.multinomial(child_probs, 1).item()
-                else:
-                    selected_child = torch.randint(0, len(child_indices), (1,)).item()
-                best_level2_idx = child_indices[selected_child]
-            else:
-                available = torch.where(child_mask > 0)[0]
-                if len(available) > 0:
-                    rand_child = available[torch.randint(0, len(available), (1,)).item()].item()
-                    best_level2_idx = child_indices[rand_child]
-                else:
-                    best_level2_idx = child_indices[torch.randint(0, len(child_indices), (1,)).item()]
+            child_grads = grad_tensor[torch.tensor(child_indices, device=loss_tensor.device)]
+            best_child_local = child_grads.argmax().item()
+            best_level2_idx = child_indices[best_child_local]
         else:
             best_level2_idx = best_level1_idx
         
-        # Path indices
+        # Error attribution path: Root → Node → Culprit
         path_indices = [root_idx, best_level1_idx, best_level2_idx]
         
-        # Create scale tensor (vectorized)
-        scales = torch.zeros(num_nodes, device=loss_tensor.device)
-        scales[path_indices[-1]] = 1.0   # Culprit
-        if len(path_indices) > 1:
-            scales[path_indices[-2]] = 0.15  # Parent
-        scales[path_indices[0]] = 0.05   # Root
+        # Store for interpretability output
+        self._error_path = path_indices
+        self._path_gradients = [grad_tensor[i].item() for i in path_indices]
         
-        # Apply scales - OPTIMIZED: only iterate parameters, use tensor indexing
+        # Proportional update scales (key K-1 innovation)
+        scales = torch.zeros(num_nodes, device=loss_tensor.device)
+        scales[path_indices[-1]] = 1.0   # Culprit: 100% update
+        if len(path_indices) > 1:
+            scales[path_indices[-2]] = 0.15  # Parent: 15% update
+        scales[path_indices[0]] = 0.05   # Root: 5% update
+        
+        # Apply scales to gradients
         for grad_idx, node_idx in enumerate(grad_to_node):
             scale = scales[node_idx]
             if scale > 0:
                 all_grads[grad_idx].mul_(scale)
         
-        # Store for node update tracking
+        # Store for tracking
         self._last_scales_indices = path_indices
         self._last_scales_tensor = scales
-        
-        # 4. COMPUTE AUXILIARY LOAD BALANCE LOSS (for logging/optional use)
-        self._load_balance_loss = self._compute_load_balance_loss()
     
-    def _compute_load_balance_loss(self) -> float:
+    def get_error_attribution(self) -> dict:
         """
-        Compute MoE-style auxiliary load balancing loss.
-        L_balance = α × N × Σᵢ(fᵢ × Pᵢ)
+        Get interpretable error attribution for the last step.
         
         Returns:
-            Load balance loss value (for logging, can be added to main loss)
+            Dictionary with error path and gradient information.
         """
-        num_nodes = len(self.all_nodes)
-        total_updates = sum(getattr(n, 'update_count', 0) for n in self.all_nodes) + 1e-8
+        if not hasattr(self, '_error_path'):
+            return {}
         
-        # f_i: fraction of updates to each node
-        f = torch.tensor(
-            [getattr(n, 'update_count', 0) / total_updates for n in self.all_nodes],
-            device=self._grad_tensor.device if hasattr(self, '_grad_tensor') else 'cpu'
-        )
+        path_info = []
+        for i, node_idx in enumerate(self._error_path):
+            node = self.all_nodes[node_idx]
+            role = ["Root", "Node", "Culprit"][min(i, 2)]
+            scale = [5, 15, 100][min(i, 2)]
+            path_info.append({
+                'node_id': node_idx,
+                'role': role,
+                'gradient': self._path_gradients[i] if hasattr(self, '_path_gradients') else 0,
+                'update_scale': f"{scale}%"
+            })
         
-        # P_i: routing probability (use softmax of gradient tensor)
-        if hasattr(self, '_grad_tensor') and self._grad_tensor.sum() > 0:
-            p = torch.softmax(self._grad_tensor, dim=0)
-        else:
-            p = torch.ones(num_nodes, device=f.device) / num_nodes
-        
-        # Switch Transformer formula: α × N × Σ(f × p)
-        alpha = 0.01  # Balancing coefficient
-        load_balance_loss = alpha * num_nodes * (f * p).sum()
-        
-        return load_balance_loss.item()
+        return {
+            'error_path': path_info,
+            'culprit_node': self._error_path[-1],
+            'total_nodes': len(self.all_nodes),
+            'nodes_updated': len(self._error_path)
+        }
 
     
     def _get_node_gradient_norm(self, node: TreeNode) -> float:
