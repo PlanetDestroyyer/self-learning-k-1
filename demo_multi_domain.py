@@ -29,7 +29,7 @@ def print_header():
     print()
 
 
-def train_on_domain(model, loader, domain_name, optimizer, criterion, steps, device, batch_size=64, log_interval=100):
+def train_on_domain(model, loader, domain_name, optimizer, criterion, steps, device, batch_size=64, log_interval=5000):
     """Train model on a single domain, tracking which nodes handle it."""
     
     print(f"\n{'=' * 70}")
