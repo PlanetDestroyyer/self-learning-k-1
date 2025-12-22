@@ -141,16 +141,11 @@ Result: Update ~3-4/41 components (7-10%)
 While **interpretability** is the PRIMARY goal, K-1 also provides:
 
 ### 1. **Computational Efficiency**
-- Only update ~20-40% of parameters
+- Only update ~20-40% of parameters per step
 - Skip components that work fine
 - Faster training, less compute
 
-### 2. **Catastrophic Forgetting Prevention** (Byproduct)
-- Don't touch working parameters
-- Preserve old knowledge automatically
-- Better continual learning
-
-### 3. **Debugging & Monitoring**
+### 2. **Debugging & Monitoring**
 ```python
 # Can trace exactly which component failed
 print("Error Path: Node 2 → Agent 6 → Sub-Agent 13")
@@ -160,7 +155,7 @@ print("Updating Agent 6 with 15% learning rate")
 print("Updating Node 2 with 5% learning rate")
 ```
 
-### 4. **Modular Improvements**
+### 3. **Modular Improvements**
 - Can replace specific sub-agents
 - Can add new agents without retraining all
 - Compositional architecture
@@ -201,7 +196,7 @@ After each dataset, we evaluate on ALL previous datasets.
 | **K-1** | Hierarchical attribution | ✅ Full path tracking | ~25-40% params updated |
 | **Baseline** | Traditional backprop | ❌ Black box | 100% params updated |
 
-**Expected Results:**
+**Key Result:**
 - K-1: Can identify "Node X → Agent Y → Sub-Agent Z caused error"
 - Baseline: "Something broke" (no details)
 
