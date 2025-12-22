@@ -35,38 +35,32 @@ def print_error_attribution(model, step, loss, verbose=True):
     path = model._error_path
     grads = model._path_gradients if hasattr(model, '_path_gradients') else [0] * len(path)
     
+    # Get dynamic scales from model (or fallback)
+    dynamic_scales = getattr(model, '_dynamic_scales', {})
+    
     # Role names for 4-level tree: Root → Node → Agent → Sub-Agent (Culprit)
     role_names = ["Root", "Node", "Agent", "Sub-Agent"]
     icons = ["✓", "⚠️", "⚠️", "🚨"]
-    
-    # Scales: Root=5%, intermediate=10-15%, Culprit=100%
-    def get_scale(i, path_len):
-        if i == path_len - 1:
-            return 100
-        elif i == 0:
-            return 5
-        elif i == path_len - 2:
-            return 15
-        else:
-            return 10
     
     if verbose:
         print(f"\n{'─' * 60}")
         print(f"Step {step:5d} | Loss: {loss:.4f}")
         print(f"{'─' * 60}")
-        print("Hierarchical Error Attribution:")
+        print("Hierarchical Error Attribution (DYNAMIC SCALING):")
         print()
         
         for i, node_idx in enumerate(path):
             icon = icons[min(i, len(icons) - 1)]
             role = role_names[min(i, len(role_names) - 1)]
-            scale = get_scale(i, len(path))
+            
+            # Get dynamic scale (or fallback to fixed)
+            scale = dynamic_scales.get(node_idx, 0.1) * 100
             grad = grads[i]
             
             indent = "  " * i
             culprit_marker = " ← CULPRIT!" if i == len(path) - 1 else ""
             
-            print(f"{indent}{icon} {role} (Node {node_idx}): grad={grad:.3f}, update={scale}%{culprit_marker}")
+            print(f"{indent}{icon} {role} (Node {node_idx}): grad={grad:.3f}, update={scale:.1f}%{culprit_marker}")
         
         print()
         print(f"Updated: {len(path)}/{len(model.all_nodes)} nodes ({len(path)/len(model.all_nodes)*100:.0f}%)")

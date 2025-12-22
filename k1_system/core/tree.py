@@ -301,27 +301,41 @@ class HierarchicalTree(nn.Module):
         self._error_path = path_indices
         self._path_gradients = [grad_tensor[i].item() for i in path_indices]
         
-        # Proportional update scales based on depth
-        # Deeper = more responsible
+        # ========================================
+        # DYNAMIC GRADIENT-PROPORTIONAL SCALING
+        # Higher gradient = higher responsibility = higher update scale
+        # ========================================
         num_nodes = len(self.all_nodes)
         scales = torch.zeros(num_nodes, device=loss_tensor.device)
         
-        # Assign scales based on position in path
-        # Last node (leaf/culprit): 100%
-        # Parent: 15%
-        # Grandparent: 10%
-        # Root: 5%
-        scale_values = [0.05, 0.10, 0.15, 1.0]  # From root to culprit
+        # Get gradients for path nodes
+        path_grads = torch.tensor([grad_tensor[i].item() for i in path_indices], device=loss_tensor.device)
         
-        for i, node_idx in enumerate(path_indices):
-            if i == len(path_indices) - 1:
-                scales[node_idx] = 1.0  # Culprit always gets 100%
-            elif i == 0:
-                scales[node_idx] = 0.05  # Root always gets 5%
-            elif i == len(path_indices) - 2:
-                scales[node_idx] = 0.15  # Parent gets 15%
-            else:
-                scales[node_idx] = 0.10  # Others get 10%
+        # Normalize to get proportional responsibility
+        # Culprit (last) still gets at least 50%, others proportional
+        if path_grads.sum() > 0:
+            # Softmax-style proportional scaling
+            normalized_grads = path_grads / path_grads.sum()
+            
+            for i, node_idx in enumerate(path_indices):
+                if i == len(path_indices) - 1:
+                    # Culprit: 50% base + proportional boost (max 100%)
+                    scales[node_idx] = min(1.0, 0.5 + normalized_grads[i].item())
+                else:
+                    # Others: proportional to their gradient contribution (capped at 30%)
+                    scales[node_idx] = min(0.3, normalized_grads[i].item())
+        else:
+            # Fallback to fixed scales if no gradients
+            for i, node_idx in enumerate(path_indices):
+                if i == len(path_indices) - 1:
+                    scales[node_idx] = 1.0
+                elif i == 0:
+                    scales[node_idx] = 0.05
+                else:
+                    scales[node_idx] = 0.1
+        
+        # Store dynamic scales for interpretability
+        self._dynamic_scales = {path_indices[i]: scales[path_indices[i]].item() for i in range(len(path_indices))}
         
         # Apply scales to gradients
         for grad_idx, node_idx in enumerate(grad_to_node):
