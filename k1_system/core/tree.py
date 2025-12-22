@@ -281,44 +281,47 @@ class HierarchicalTree(nn.Module):
         
         # ========================================
         # HIERARCHICAL ERROR ATTRIBUTION
-        # Find responsible path: Root → Node → Agent (culprit)
+        # Drill down until we reach a leaf: Root → Node → Agent → Sub-Agent
         # ========================================
         
-        root_idx = 0
+        path_indices = [0]  # Start with root
+        current_node = self.root
         
-        # Level 1: Find node with highest gradient among root's children
-        level1_child_indices = [self.node_to_idx[c] for c in self.root.child_nodes]
-        
-        if len(level1_child_indices) > 0:
-            level1_grads = grad_tensor[torch.tensor(level1_child_indices, device=loss_tensor.device)]
-            best_local = level1_grads.argmax().item()
-            best_level1_idx = level1_child_indices[best_local]
-        else:
-            best_level1_idx = root_idx
-        
-        # Level 2: Find agent with highest gradient among selected node's children
-        best_level1_node = self.all_nodes[best_level1_idx]
-        if best_level1_node.child_nodes:
-            child_indices = [self.node_to_idx[c] for c in best_level1_node.child_nodes]
+        # Keep drilling down until we hit a leaf
+        while current_node.child_nodes:
+            child_indices = [self.node_to_idx[c] for c in current_node.child_nodes]
             child_grads = grad_tensor[torch.tensor(child_indices, device=loss_tensor.device)]
             best_child_local = child_grads.argmax().item()
-            best_level2_idx = child_indices[best_child_local]
-        else:
-            best_level2_idx = best_level1_idx
-        
-        # Error attribution path: Root → Node → Culprit
-        path_indices = [root_idx, best_level1_idx, best_level2_idx]
+            best_child_idx = child_indices[best_child_local]
+            
+            path_indices.append(best_child_idx)
+            current_node = self.all_nodes[best_child_idx]
         
         # Store for interpretability output
         self._error_path = path_indices
         self._path_gradients = [grad_tensor[i].item() for i in path_indices]
         
-        # Proportional update scales (key K-1 innovation)
+        # Proportional update scales based on depth
+        # Deeper = more responsible
+        num_nodes = len(self.all_nodes)
         scales = torch.zeros(num_nodes, device=loss_tensor.device)
-        scales[path_indices[-1]] = 1.0   # Culprit: 100% update
-        if len(path_indices) > 1:
-            scales[path_indices[-2]] = 0.15  # Parent: 15% update
-        scales[path_indices[0]] = 0.05   # Root: 5% update
+        
+        # Assign scales based on position in path
+        # Last node (leaf/culprit): 100%
+        # Parent: 15%
+        # Grandparent: 10%
+        # Root: 5%
+        scale_values = [0.05, 0.10, 0.15, 1.0]  # From root to culprit
+        
+        for i, node_idx in enumerate(path_indices):
+            if i == len(path_indices) - 1:
+                scales[node_idx] = 1.0  # Culprit always gets 100%
+            elif i == 0:
+                scales[node_idx] = 0.05  # Root always gets 5%
+            elif i == len(path_indices) - 2:
+                scales[node_idx] = 0.15  # Parent gets 15%
+            else:
+                scales[node_idx] = 0.10  # Others get 10%
         
         # Apply scales to gradients
         for grad_idx, node_idx in enumerate(grad_to_node):

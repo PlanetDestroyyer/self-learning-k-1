@@ -35,10 +35,20 @@ def print_error_attribution(model, step, loss, verbose=True):
     path = model._error_path
     grads = model._path_gradients if hasattr(model, '_path_gradients') else [0] * len(path)
     
-    # Icons for different roles
-    icons = ["✓", "⚠️", "🚨"]
-    roles = ["Root", "Node", "Culprit"]
-    scales = [5, 15, 100]
+    # Role names for 4-level tree: Root → Node → Agent → Sub-Agent (Culprit)
+    role_names = ["Root", "Node", "Agent", "Sub-Agent"]
+    icons = ["✓", "⚠️", "⚠️", "🚨"]
+    
+    # Scales: Root=5%, intermediate=10-15%, Culprit=100%
+    def get_scale(i, path_len):
+        if i == path_len - 1:
+            return 100
+        elif i == 0:
+            return 5
+        elif i == path_len - 2:
+            return 15
+        else:
+            return 10
     
     if verbose:
         print(f"\n{'─' * 60}")
@@ -48,9 +58,9 @@ def print_error_attribution(model, step, loss, verbose=True):
         print()
         
         for i, node_idx in enumerate(path):
-            icon = icons[min(i, 2)]
-            role = roles[min(i, 2)]
-            scale = scales[min(i, 2)]
+            icon = icons[min(i, len(icons) - 1)]
+            role = role_names[min(i, len(role_names) - 1)]
+            scale = get_scale(i, len(path))
             grad = grads[i]
             
             indent = "  " * i
