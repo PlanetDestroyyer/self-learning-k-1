@@ -29,7 +29,7 @@ def print_header():
     print()
 
 
-def train_on_domain(model, loader, domain_name, optimizer, criterion, steps, device, log_interval=200):
+def train_on_domain(model, loader, domain_name, optimizer, criterion, steps, device, batch_size=64, log_interval=5000):
     """Train model on a single domain, tracking which nodes handle it."""
     
     print(f"\n{'=' * 70}")
@@ -41,7 +41,7 @@ def train_on_domain(model, loader, domain_name, optimizer, criterion, steps, dev
     start_time = time.time()
     
     for step in range(steps):
-        x, y = loader.get_batch('train', 16, return_tensors='pt')
+        x, y = loader.get_batch('train', batch_size, return_tensors='pt')
         x, y = x.to(device), y.to(device)
         
         optimizer.zero_grad()
@@ -221,4 +221,5 @@ def run_multi_domain_demo(steps_per_domain=1000):
 
 
 if __name__ == '__main__':
-    run_multi_domain_demo(steps_per_domain=1000)
+    run_multi_domain_demo(steps_per_domain=10000)
+
