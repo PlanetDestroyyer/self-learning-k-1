@@ -80,6 +80,9 @@ class TreeNode(nn.Module):
         self.token_counts = {}  # {token_id: count} - track which tokens this node handles
         self.error_sum = 0.0  # Sum of errors when this node was culprit
         self.specialization_label = None  # Human-readable label (e.g., "nouns", "verbs")
+        
+        # Domain specialization tracking
+        self.domain_counts = {}  # {domain_name: count} - track which domains this node handles
     
     def record_tokens(self, token_ids: torch.Tensor):
         """
@@ -90,6 +93,42 @@ class TreeNode(nn.Module):
         """
         for tid in token_ids.flatten().tolist():
             self.token_counts[tid] = self.token_counts.get(tid, 0) + 1
+    
+    def record_domain(self, domain_name: str):
+        """
+        Record which domain this node handled when it was the culprit.
+        
+        Args:
+            domain_name: Name of the domain (e.g., 'wikitext', 'code', 'scientific')
+        """
+        self.domain_counts[domain_name] = self.domain_counts.get(domain_name, 0) + 1
+    
+    def get_primary_domain(self) -> tuple:
+        """
+        Get the domain this node handles most often.
+        
+        Returns:
+            Tuple of (domain_name, count, percentage) or (None, 0, 0) if no data
+        """
+        if not self.domain_counts:
+            return (None, 0, 0.0)
+        
+        total = sum(self.domain_counts.values())
+        top_domain = max(self.domain_counts.items(), key=lambda x: x[1])
+        return (top_domain[0], top_domain[1], top_domain[1] / total * 100)
+    
+    def get_domain_distribution(self) -> dict:
+        """
+        Get the distribution of domains this node handles.
+        
+        Returns:
+            Dictionary with {domain: percentage}
+        """
+        if not self.domain_counts:
+            return {}
+        
+        total = sum(self.domain_counts.values())
+        return {domain: count / total * 100 for domain, count in self.domain_counts.items()}
     
     def get_top_tokens(self, n: int = 10) -> list:
         """
@@ -112,6 +151,7 @@ class TreeNode(nn.Module):
             Dictionary with specialization metrics
         """
         total = sum(self.token_counts.values())
+        primary_domain = self.get_primary_domain()
         return {
             'node_id': self.node_id,
             'level': self.level,
@@ -119,6 +159,9 @@ class TreeNode(nn.Module):
             'unique_tokens': len(self.token_counts),
             'total_tokens': total,
             'top_tokens': self.get_top_tokens(5),
+            'primary_domain': primary_domain[0],
+            'domain_confidence': primary_domain[2],
+            'domain_distribution': self.get_domain_distribution(),
             'label': self.specialization_label
         }
     
