@@ -576,12 +576,6 @@ This system opens up several research questions:
 
 ---
 
-## 📄 License
-
-MIT License
-
----
-
 ## 🎓 Core Philosophy
 
 **"Neural networks don't have to be black boxes. With hierarchical error attribution, we can KNOW what broke and FIX just that."**
