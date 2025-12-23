@@ -183,21 +183,12 @@ class K1SystemTrainer:
             self.trainer.scaler.unscale_(self.trainer.optimizer)
             torch.nn.utils.clip_grad_norm_(self.trainer.model.parameters(), max_norm=1.0)
             
-            # Hierarchical error attribution
-            with torch.no_grad():
-                responsible_path = self.trainer.model.find_responsible_path(
-                    loss=loss.item(),
-                    current_step=self.step
-                )
-                scales = self.trainer.model.get_proportional_scales(responsible_path)
-                self.trainer.model.apply_proportional_updates(scales)
+            # Hierarchical error attribution (new fast method)
+            self.trainer.model.fast_hierarchical_step(loss, self.step)
             
             # Optimizer step
             self.trainer.scaler.step(self.trainer.optimizer)
             self.trainer.scaler.update()
-            
-            # Mark updated nodes for cooldown
-            self.trainer.model.mark_nodes_updated(scales, self.step)
             
             # Update phase controller
             current_phase = self.phase_controller.step(loss=loss.item())
@@ -207,12 +198,12 @@ class K1SystemTrainer:
             
             # Logging
             if self.step % self.args.log_interval == 0:
-                self._log_progress(loss.item(), responsible_path, scales)
+                self._log_progress(loss.item())
         
         # Training complete
         self._training_complete()
     
-    def _log_progress(self, current_loss: float, responsible_path, scales):
+    def _log_progress(self, current_loss: float):
         """Log training progress."""
         avg_loss = (self.total_loss / self.step).item()
         elapsed = time.time() - self.start_time
@@ -226,15 +217,15 @@ class K1SystemTrainer:
         print(f"\n[{self.step:6d}] Loss: {avg_loss:.4f} | {phase_str} | Speed: {speed:.1f} step/s")
         print("─" * 60)
         
-        # Show responsible path
-        path_str = " → ".join(
-            f"Node{node.node_id}(r={resp:.2f})"
-            for node, resp in responsible_path
-        )
-        print(f"Responsible Path: {path_str}")
+        # Show error path from fast_hierarchical_step
+        if hasattr(self.trainer.model, '_error_path'):
+            path = self.trainer.model._error_path
+            grads = self.trainer.model._path_gradients
+            path_str = " → ".join(f"Node{idx}(g={grads[i]:.2f})" for i, idx in enumerate(path))
+            print(f"Error Path: {path_str}")
         
         # Summary
-        nodes_updated = sum(1 for s in scales.values() if s > 0)
+        nodes_updated = len(getattr(self.trainer.model, '_error_path', []))
         total_nodes = len(self.trainer.model.all_nodes)
         print(f"Updated: {nodes_updated}/{total_nodes} nodes ({nodes_updated/total_nodes*100:.0f}%)")
         
